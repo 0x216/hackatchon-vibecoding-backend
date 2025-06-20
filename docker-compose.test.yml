@@ -1,0 +1,80 @@
+
+services:
+  test-db:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: legalrag_test
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - test-network
+    restart: unless-stopped
+
+  test-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - test-network
+    restart: unless-stopped
+
+  test-weaviate:
+    image: semitechnologies/weaviate:1.21.8
+    ports:
+      - "8081:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'text2vec-transformers'
+      ENABLE_MODULES: 'text2vec-transformers'
+      TRANSFORMERS_INFERENCE_API: 'http://test-t2v-transformers:8080'
+    networks:
+      - test-network
+    restart: unless-stopped
+
+  test-t2v-transformers:
+    image: semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    environment:
+      ENABLE_CUDA: '0'
+    networks:
+      - test-network
+    restart: unless-stopped
+
+  test-runner:
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://test_user:test_pass@test-db:5432/legalrag_test
+      - REDIS_URL=redis://test-redis:6379
+      - WEAVIATE_URL=http://test-weaviate:8080
+      - DEBUG=true
+      - TESTING=true
+    volumes:
+      - ./app:/app
+      - ./uploads:/app/uploads
+      - ./test-results:/app/test-results
+    depends_on:
+      - test-db
+      - test-redis
+      - test-weaviate
+    networks:
+      - test-network
+    command: >
+      sh -c "
+        sleep 10 &&
+        pytest --cov=app --cov-report=html:/app/test-results/htmlcov --cov-report=xml:/app/test-results/coverage.xml --junit-xml=/app/test-results/junit.xml -v
+      "
+
+volumes:
+  test_postgres_data:
+
+networks:
+  test-network:
+    driver: bridge 

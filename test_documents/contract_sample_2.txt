@@ -1,0 +1,41 @@
+AMENDED SERVICE AGREEMENT
+
+This Amended Service Agreement ("Agreement") is entered into on March 20, 2024, between TechCorp Inc., a Delaware corporation ("Company"), and DataServices LLC, a California limited liability company ("Service Provider").
+
+RECITALS
+
+WHEREAS, Company desires to engage Service Provider to provide enhanced data processing services; and
+WHEREAS, Service Provider has the expertise and capability to provide such advanced services;
+
+NOW, THEREFORE, in consideration of the mutual covenants contained herein, the parties agree as follows:
+
+1. SERVICES
+Service Provider shall provide comprehensive data processing, analysis, and machine learning services as specified in Exhibit A-2 attached hereto and incorporated by reference.
+
+2. TERM
+This Agreement shall commence on April 1, 2024, and shall continue for a period of eighteen (18) months, unless earlier terminated in accordance with the provisions hereof.
+
+3. PAYMENT TERMS
+Company shall pay Service Provider a monthly fee of $35,000 within twenty (20) days of receipt of invoice. Late payments shall incur a penalty of 2.0% per month.
+
+4. CONFIDENTIALITY
+Each party acknowledges that it may have access to certain confidential information of the other party. Each party agrees to maintain the confidentiality of such information for a period of seven (7) years following termination of this Agreement.
+
+5. TERMINATION
+Either party may terminate this Agreement upon ninety (90) days written notice to the other party. Upon termination, all confidentiality obligations and data return requirements shall survive.
+
+6. LIABILITY
+Service Provider's liability under this Agreement shall not exceed two times (2x) the total amount paid by Company to Service Provider in the twelve (12) months preceding the claim.
+
+7. INTELLECTUAL PROPERTY
+All intellectual property developed in the course of providing services shall be jointly owned by both parties, with each party having the right to use such IP for their respective business purposes.
+
+8. GOVERNING LAW
+This Agreement shall be governed by and construed in accordance with the laws of the State of California.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the date first written above.
+
+TechCorp Inc.                    DataServices LLC
+By: /s/ John Smith              By: /s/ Sarah Johnson
+Name: John Smith                Name: Sarah Johnson
+Title: CEO                      Title: Managing Director 

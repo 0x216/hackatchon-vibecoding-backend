@@ -1,0 +1,118 @@
+services:
+  api:
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/legalrag
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+      - DEBUG=true
+    volumes:
+      - ./app:/app
+      - ./uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: legalrag
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  weaviate:
+    image: semitechnologies/weaviate:1.21.8
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'text2vec-transformers'
+      ENABLE_MODULES: 'text2vec-transformers'
+      TRANSFORMERS_INFERENCE_API: 'http://t2v-transformers:8080'
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+  t2v-transformers:
+    image: semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    environment:
+      ENABLE_CUDA: '0'
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+  worker:
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    command: celery -A app.workers.worker worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/legalrag
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+    volumes:
+      - ./app:/app
+      - ./uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+  flower:
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    command: celery -A app.workers.worker flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/legalrag
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - legalrag-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  weaviate_data:
+
+networks:
+  legalrag-network:
+    driver: bridge 

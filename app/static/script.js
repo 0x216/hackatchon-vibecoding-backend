@@ -760,7 +760,7 @@ class LegalRAGApp {
                             <div>
                                 Uploaded: ${new Date(
                                   doc.uploaded_at
-                                ).toLocaleDateString()}
+                                ).toLocaleString()}
                                 ${
                                   doc.chunk_count
                                     ? `• ${doc.chunk_count} chunks`

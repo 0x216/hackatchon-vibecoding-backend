@@ -285,15 +285,18 @@ class LegalRAGApp {
   }
 
   updateStatus(message, type) {
-    const statusElement = this.status.querySelector("span");
-    const dotElement = this.status.querySelector(".status-dot");
+    // Since we now use a logo instead of status text, we can optionally
+    // update the image opacity or add a visual indicator for status
+    const logoElement = this.status.querySelector("img");
 
-    statusElement.textContent = message;
-
-    if (type === "online") {
-      dotElement.style.color = "#48bb78";
-    } else {
-      dotElement.style.color = "#f56565";
+    if (logoElement) {
+      if (type === "online") {
+        logoElement.style.opacity = "1";
+        logoElement.style.filter = "none";
+      } else {
+        logoElement.style.opacity = "0.5";
+        logoElement.style.filter = "grayscale(100%)";
+      }
     }
   }
 

@@ -37,29 +37,120 @@
                 <div class="upload-section">
                     <div class="upload-zone" id="uploadZone">
                         <i class="fas fa-cloud-upload-alt"></i>
-                        <p>Drag document here or <span class="upload-text">choose file</span></p>
-                        <input type="file" id="fileInput" accept=".pdf,.docx,.txt" hidden>
+                        <p>Drag documents here or <span class="upload-text">choose files</span></p>
+                        <input type="file" id="fileInput" accept=".pdf,.docx,.txt" multiple hidden>
                         <div class="file-types">
-                            Supported: PDF, DOCX, TXT
+                            Supported: PDF, DOCX, TXT (Multiple files supported)
                         </div>
                     </div>
                     <button class="btn btn-primary" id="uploadBtn" disabled>
                         <i class="fas fa-upload"></i>
-                        Upload Document
+                        Upload Documents
                     </button>
+
+                    <!-- Upload Progress -->
+                    <div class="upload-progress" id="uploadProgress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <div class="progress-text" id="progressText">Uploading documents...</div>
+                    </div>
+                </div>
+
+                <!-- Document Management Tools -->
+                <div class="document-tools">
+                    <div class="search-section">
+                        <div class="search-input">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="documentSearch" placeholder="Search documents...">
+                            <button class="clear-search" id="clearSearch" style="display: none;">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-section">
+                        <div class="filter-group">
+                            <select id="statusFilter">
+                                <option value="">All Status</option>
+                                <option value="completed">Completed</option>
+                                <option value="processing">Processing</option>
+                                <option value="pending">Pending</option>
+                                <option value="failed">Failed</option>
+                            </select>
+                            <select id="typeFilter">
+                                <option value="">All Types</option>
+                                <option value="pdf">PDF</option>
+                                <option value="docx">DOCX</option>
+                                <option value="txt">TXT</option>
+                            </select>
+                            <select id="sortBy">
+                                <option value="date_desc">Newest First</option>
+                                <option value="date_asc">Oldest First</option>
+                                <option value="name_asc">Name A-Z</option>
+                                <option value="name_desc">Name Z-A</option>
+                                <option value="size_desc">Largest First</option>
+                                <option value="size_asc">Smallest First</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="selection-tools">
+                        <div class="selection-info" id="selectionInfo">
+                            <i class="fas fa-info-circle"></i>
+                            <span>Hold Ctrl/Cmd to select multiple, Shift for range</span>
+                        </div>
+                        <div class="bulk-actions" id="bulkActions" style="display: none;">
+                            <button class="btn btn-small btn-danger" id="deleteSelected">
+                                <i class="fas fa-trash"></i> Delete Selected
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Documents List -->
                 <div class="documents-section">
-                    <h3>Uploaded Documents</h3>
-                    <div class="selection-info" style="display: none; background: #e3f2fd; padding: 8px; border-radius: 4px; margin-bottom: 10px; font-size: 14px; color: #1976d2;">
-                        <i class="fas fa-info-circle"></i> Hold Ctrl/Cmd to select multiple documents
+                    <div class="documents-header">
+                        <div class="library-title">
+                            <h3>Document Library</h3>
+                            <div class="document-counter" id="documentCounter">
+                                <span>0 documents</span>
+                            </div>
+                        </div>
+                        <div class="view-controls">
+                            <button class="view-btn" id="selectAllBtn">
+                                <i class="fas fa-check-square"></i> Select All
+                            </button>
+                            <button class="view-btn" id="clearSelectionBtn" style="display: none;">
+                                <i class="fas fa-square"></i> Clear Selection
+                            </button>
+                        </div>
                     </div>
+                    
                     <div class="documents-list" id="documentsList">
                         <div class="empty-state">
                             <i class="fas fa-folder-open"></i>
                             <p>No documents uploaded</p>
                         </div>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="pagination" id="pagination" style="display: none;">
+                        <button class="pagination-btn" id="prevPage" disabled>
+                            <i class="fas fa-chevron-left"></i> Previous
+                        </button>
+                        <div class="pagination-info">
+                            <span id="pageInfo">Page 1 of 1</span>
+                            <select id="pageSize">
+                                <option value="10">10 per page</option>
+                                <option value="25" selected>25 per page</option>
+                                <option value="50">50 per page</option>
+                                <option value="100">100 per page</option>
+                            </select>
+                        </div>
+                        <button class="pagination-btn" id="nextPage" disabled>
+                            Next <i class="fas fa-chevron-right"></i>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -70,13 +161,6 @@
                     <i class="fas fa-comments"></i>
                     <h2>Legal Chat</h2>
                     <div class="controls">
-                        <div class="rag-toggle">
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="ragToggle" checked>
-                                <span class="toggle-slider"></span>
-                            </label>
-                            <span class="toggle-label">Iterative RAG</span>
-                        </div>
                         <div class="llm-selector">
                             <select id="llmProvider">
                                 <option value="groq">Groq (Fast)</option>
@@ -87,6 +171,8 @@
                     </div>
                 </div>
 
+
+
                 <!-- Chat Messages -->
                 <div class="chat-container">
                     <div class="chat-messages" id="chatMessages">
@@ -95,7 +181,7 @@
                                 <i class="fas fa-robot"></i>
                             </div>
                             <div class="message-content">
-                                <p>Welcome! I'm a legal AI assistant. Upload a document and ask me questions about it.</p>
+                                <p>Welcome! I'm a legal AI assistant. Upload documents and ask me questions about them.</p>
                                 <div class="message-time">System</div>
                             </div>
                         </div>
@@ -104,19 +190,22 @@
                     <!-- Chat Input -->
                     <div class="chat-input-section">
                         <div class="quick-questions">
-                            <button class="quick-btn" data-question="Analyze the main terms of this contract">
+                            <button class="quick-btn" data-question="Analyze the main terms of these contracts">
                                 <i class="fas fa-search"></i> Contract Analysis
                             </button>
-                            <button class="quick-btn" data-question="What are the risks in this document?">
+                            <button class="quick-btn" data-question="What are the risks in these documents?">
                                 <i class="fas fa-exclamation-triangle"></i> Find Risks
                             </button>
-                            <button class="quick-btn" data-question="Explain the termination conditions">
-                                <i class="fas fa-handshake"></i> Termination Terms
+                            <button class="quick-btn" data-question="Compare termination conditions across documents">
+                                <i class="fas fa-balance-scale"></i> Compare Terms
+                            </button>
+                            <button class="quick-btn" data-question="Summarize key obligations from all documents">
+                                <i class="fas fa-list-ul"></i> Key Obligations
                             </button>
                         </div>
 
                         <div class="chat-input">
-                            <input type="text" id="messageInput" placeholder="Ask a question about the uploaded document..." disabled>
+                            <input type="text" id="messageInput" placeholder="Ask a question about the documents..." disabled>
                             <button id="sendBtn" disabled>
                                 <i class="fas fa-paper-plane"></i>
                             </button>

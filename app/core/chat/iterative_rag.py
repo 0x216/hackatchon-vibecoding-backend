@@ -6,6 +6,9 @@ import asyncio
 
 from app.core.chat.llm_client import LLMClient, LLMClientFactory, ChatMessage, LLMResponse
 from app.core.chat.enhanced_retriever import EnhancedDocumentRetriever
+from app.core.chat.adaptive_limits import AdaptiveLimitsManager, create_adaptive_limits_manager
+from app.core.chat.enhanced_citations import create_enhanced_citations, format_citations_for_response, generate_bibliography
+from app.core.chat.search_cache import get_search_cache, cached_search
 from app.db.connection import async_session
 from app.db.models import ChatSession, ChatMessage as DBChatMessage
 
@@ -24,9 +27,11 @@ class IterativeRAGGenerator:
     5. Response Generation - Generate final answer
     """
     
-    def __init__(self, llm_client: LLMClient = None, retriever: EnhancedDocumentRetriever = None):
+    def __init__(self, llm_client: Optional[LLMClient] = None, retriever: Optional[EnhancedDocumentRetriever] = None):
         self.llm_client = llm_client or LLMClientFactory.get_default_client()
         self.retriever = retriever or EnhancedDocumentRetriever()
+        self.limits_manager = create_adaptive_limits_manager()
+        self.search_cache = get_search_cache()
         
         # System prompts for different tasks
         self.query_rewriter_prompt = """You are an expert at converting user questions into effective search queries for legal documents.
@@ -91,74 +96,116 @@ Provide a clear, detailed answer based on the available information."""
     async def generate_response(
         self, 
         query: str, 
-        session_id: str = None,
-        max_iterations: int = 3,
-        max_chunks_per_iteration: int = 5,
-        document_ids: List[str] = None
+        session_id: Optional[str] = None,
+        max_iterations: Optional[int] = None,
+        max_chunks_per_iteration: Optional[int] = None,
+        document_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Generate response using iterative RAG approach."""
+        """Generate response using adaptive iterative RAG approach."""
         
         try:
-            logger.info(f"Starting iterative RAG for query: {query[:100]}...")
+            logger.info(f"Starting adaptive iterative RAG for query: {query[:100]}...")
             
-            # Step 1: Query Analysis & Rewriting
-            search_queries = await self._rewrite_query(query)
+            # Step 1: Analyze query complexity and set adaptive limits
+            adaptive_limits = self.limits_manager.get_initial_limits(query)
+            
+            # Override with user-provided limits if specified
+            effective_max_iterations = max_iterations or adaptive_limits.max_iterations
+            effective_max_chunks = max_chunks_per_iteration or adaptive_limits.max_chunks_per_iteration
+            
+            logger.info(f"Adaptive limits: max_iterations={effective_max_iterations}, "
+                       f"max_chunks={effective_max_chunks}")
+            
+            # Step 2: Query Analysis & Rewriting (with caching)
+            search_queries = await self._rewrite_query_cached(query)
             logger.info(f"Generated {len(search_queries)} search queries")
             
-            # Step 2: Iterative Retrieval
+            # Step 3: Iterative Retrieval with adaptive limits
             all_chunks = []
             iteration = 0
             
-            while iteration < max_iterations:
+            while iteration < effective_max_iterations:
                 iteration += 1
-                logger.info(f"Iteration {iteration}: Searching with {len(search_queries)} queries")
                 
-                # Retrieve chunks for current queries
-                new_chunks = await self._retrieve_chunks(
+                # Evaluate current search quality
+                search_quality = self.limits_manager.evaluate_search_quality(all_chunks, query)
+                
+                # Check if we should continue
+                should_continue, reason = self.limits_manager.should_continue_search(
+                    iteration - 1, search_quality, adaptive_limits, query
+                )
+                
+                if not should_continue and iteration > 1:
+                    logger.info(f"Early stopping: {reason}")
+                    break
+                
+                # Adjust chunk limit dynamically
+                dynamic_chunk_limit = self.limits_manager.adjust_chunk_limit(
+                    iteration, search_quality, effective_max_chunks
+                )
+                
+                logger.info(f"Iteration {iteration}: Searching with {len(search_queries)} queries, "
+                           f"limit={dynamic_chunk_limit}")
+                
+                # Retrieve chunks for current queries (with caching)
+                new_chunks = await self._retrieve_chunks_cached(
                     search_queries, 
-                    max_chunks_per_iteration,
+                    dynamic_chunk_limit,
                     document_ids,
                     exclude_chunk_ids=[chunk.get('chunk', {}).get('id') for chunk in all_chunks]
                 )
                 
                 all_chunks.extend(new_chunks)
                 
-                # Step 3: Self-Assessment
-                assessment = await self._assess_information_sufficiency(query, all_chunks)
-                
-                logger.info(f"Assessment: sufficient={assessment['sufficient']}, confidence={assessment['confidence']}")
-                
-                # If we have sufficient information or no additional queries, break
-                if (assessment['sufficient'] and assessment['confidence'] > 0.7) or not assessment.get('additional_queries'):
-                    break
-                
-                # Update search queries for next iteration
-                search_queries = assessment.get('additional_queries', [])
+                # Step 4: Self-Assessment for additional queries
+                if iteration < effective_max_iterations:
+                    assessment = await self._assess_information_sufficiency(query, all_chunks)
+                    
+                    logger.info(f"Assessment: sufficient={assessment['sufficient']}, "
+                               f"confidence={assessment['confidence']}")
+                    
+                    # Update search queries for next iteration
+                    if assessment.get('additional_queries'):
+                        search_queries = assessment['additional_queries']
+                    else:
+                        break  # No more queries to try
             
-            # Step 4: Generate Final Response
-            context = self._build_context(all_chunks)
+            # Step 5: Create enhanced citations
+            enhanced_citations = create_enhanced_citations(all_chunks)
+            
+            # Step 6: Generate Final Response with enhanced context
+            context = self._build_context_with_citations(all_chunks, enhanced_citations)
             final_response = await self._generate_final_response(query, context)
             
-            # Step 5: Format and save response
-            formatted_response = self._format_response(
-                final_response, 
-                all_chunks, 
-                query,
-                iterations_used=iteration
+            # Step 7: Format response with all enhancements
+            final_search_quality = self.limits_manager.evaluate_search_quality(all_chunks, query)
+            resource_summary = self.limits_manager.get_resource_usage_summary(
+                iteration, len(all_chunks), final_search_quality
             )
             
+            formatted_response = self._format_enhanced_response(
+                final_response, 
+                all_chunks,
+                enhanced_citations,
+                query,
+                iteration,
+                resource_summary
+            )
+            
+            # Step 8: Save conversation
             if session_id:
                 await self._save_conversation(session_id, query, formatted_response)
             
             return formatted_response
             
         except Exception as e:
-            logger.error(f"Error in iterative RAG: {e}")
+            logger.error(f"Error in adaptive iterative RAG: {e}")
             return {
                 "content": f"I apologize, but I encountered an error while processing your query: {str(e)}",
                 "sources": [],
                 "error": True,
-                "query": query
+                "query": query,
+                "resource_usage": {"error": str(e)}
             }
     
     async def _rewrite_query(self, query: str) -> List[str]:
@@ -189,13 +236,33 @@ Provide a clear, detailed answer based on the available information."""
         except Exception as e:
             logger.error(f"Error rewriting query: {e}")
             return [query]  # Fallback to original query
+
+    async def _rewrite_query_cached(self, query: str) -> List[str]:
+        """Convert user question into effective search queries with caching."""
+        
+        cache_key = f"rewrite:{query}"
+        
+        # Try to get from cache
+        cached_result = self.search_cache.get(cache_key)
+        if cached_result:
+            logger.info(f"Using cached query rewrite for: {query[:50]}...")
+            return [r.get('query', '') for r in cached_result if r.get('query')]
+        
+        # Generate new queries
+        search_queries = await self._rewrite_query(query)
+        
+        # Cache the result
+        cache_results = [{'query': q} for q in search_queries]
+        self.search_cache.put(cache_key, cache_results, ttl_seconds=1800)  # 30 minutes
+        
+        return search_queries
     
     async def _retrieve_chunks(
         self, 
         queries: List[str], 
         max_chunks: int,
-        document_ids: List[str] = None,
-        exclude_chunk_ids: List[str] = None
+        document_ids: Optional[List[str]] = None,
+        exclude_chunk_ids: Optional[List[str]] = None
     ) -> List[Dict]:
         """Retrieve chunks for multiple queries."""
         
@@ -221,6 +288,11 @@ Provide a clear, detailed answer based on the available information."""
             if isinstance(result, Exception):
                 logger.error(f"Error in retrieval: {result}")
                 continue
+            
+            # Ensure result is iterable (should be a list of chunks)
+            if not isinstance(result, (list, tuple)):
+                logger.error(f"Unexpected result type: {type(result)}")
+                continue
                 
             for chunk in result:
                 chunk_id = chunk.get('chunk', {}).get('id')
@@ -230,6 +302,73 @@ Provide a clear, detailed answer based on the available information."""
         
         # Sort by relevance and limit
         all_chunks.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+        return all_chunks[:max_chunks]
+
+    async def _retrieve_chunks_cached(
+        self, 
+        queries: List[str], 
+        max_chunks: int,
+        document_ids: Optional[List[str]] = None,
+        exclude_chunk_ids: Optional[List[str]] = None
+    ) -> List[Dict]:
+        """Retrieve chunks for multiple queries with intelligent caching."""
+        
+        all_chunks = []
+        seen_chunk_ids = set(exclude_chunk_ids or [])
+        chunks_per_query = max(1, max_chunks // len(queries))
+        
+        for query in queries:
+            cache_key = f"search:{query}:{chunks_per_query}:{str(document_ids)}"
+            
+            # Try to get from cache
+            cached_chunks = self.search_cache.get(cache_key)
+            if cached_chunks:
+                logger.info(f"Using cached search results for: {query[:50]}...")
+                
+                # Filter out already seen chunks
+                for chunk in cached_chunks:
+                    chunk_id = chunk.get('chunk', {}).get('id')
+                    if chunk_id and chunk_id not in seen_chunk_ids:
+                        all_chunks.append(chunk)
+                        seen_chunk_ids.add(chunk_id)
+                        
+                        if len(all_chunks) >= max_chunks:
+                            break
+            else:
+                # Perform new search
+                try:
+                    results = await self.retriever.retrieve_relevant_chunks(
+                        query,
+                        limit=chunks_per_query,
+                        document_ids=document_ids
+                    )
+                    
+                    # Cache the results
+                    if results:
+                        self.search_cache.put(cache_key, results, ttl_seconds=3600)  # 1 hour
+                        logger.info(f"Cached search results for: {query[:50]}...")
+                    
+                    # Add to results
+                    for chunk in results:
+                        chunk_id = chunk.get('chunk', {}).get('id')
+                        if chunk_id and chunk_id not in seen_chunk_ids:
+                            all_chunks.append(chunk)
+                            seen_chunk_ids.add(chunk_id)
+                            
+                            if len(all_chunks) >= max_chunks:
+                                break
+                                
+                except Exception as e:
+                    logger.error(f"Error retrieving chunks for query '{query}': {e}")
+                    continue
+            
+            # Stop when we have enough chunks overall
+            if len(all_chunks) >= max_chunks:
+                break
+        
+        # Sort by relevance and limit
+        all_chunks.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+        logger.info(f"Retrieved {len(all_chunks)} unique chunks (with caching)")
         return all_chunks[:max_chunks]
     
     async def _assess_information_sufficiency(
@@ -300,8 +439,47 @@ Provide a clear, detailed answer based on the available information."""
             
             context_part = f"""
 Document {i}:
-- Source: {document.get('filename', 'Unknown')}
+- Source: {document.get('filename') or document.get('title') or document.get('name') or 'Unknown Document'}
 - Section: {chunk.get('chunk_type', 'general')}
+- Relevance: {similarity:.3f}
+- Content: {chunk.get('text', '')}
+---
+"""
+            context_parts.append(context_part)
+        
+        return "\n".join(context_parts)
+
+    def _build_context_with_citations(self, retrieval_results: List[Dict], citations: List) -> str:
+        """Build context string with enhanced citations."""
+        
+        if not retrieval_results:
+            return "No relevant documents found in the corpus."
+        
+        context_parts = ["RELEVANT DOCUMENT INFORMATION WITH PRECISE CITATIONS:\n"]
+        
+        for i, (result, citation) in enumerate(zip(retrieval_results, citations), 1):
+            chunk = result.get('chunk', {})
+            document = result.get('document', {})
+            similarity = result.get('similarity_score', 0.0)
+            
+            # Build citation reference
+            citation_ref = []
+            if citation.article_number:
+                citation_ref.append(f"Art. {citation.article_number}")
+            if citation.section_number:
+                citation_ref.append(f"§ {citation.section_number}")
+            if citation.paragraph_number:
+                citation_ref.append(f"¶ {citation.paragraph_number}")
+            if citation.page_number:
+                citation_ref.append(f"p. {citation.page_number}")
+            
+            citation_str = ", ".join(citation_ref) if citation_ref else "General"
+            
+            context_part = f"""
+Document {i} [{citation_str}]:
+- Source: {document.get('filename') or document.get('title') or document.get('name') or 'Unknown Document'}
+- Reference: {citation_str}
+- Dates: {citation.date_mentioned or citation.effective_date or 'N/A'}
 - Relevance: {similarity:.3f}
 - Content: {chunk.get('text', '')}
 ---
@@ -326,7 +504,7 @@ Document {i}:
             document = result.get('document', {})
             
             source = {
-                "document_name": document.get('filename', 'Unknown'),
+                "document_name": document.get('filename') or document.get('title') or document.get('name') or 'Unknown Document',
                 "document_id": document.get('id'),
                 "chunk_type": chunk.get('chunk_type', 'general'),
                 "similarity_score": result.get('similarity_score', 0.0),
@@ -342,6 +520,63 @@ Document {i}:
             "usage": llm_response.usage,
             "iterations_used": iterations_used,
             "total_chunks_found": len(retrieval_results),
+            "timestamp": datetime.utcnow().isoformat(),
+            "error": False
+        }
+
+    def _format_enhanced_response(
+        self, 
+        llm_response: LLMResponse, 
+        retrieval_results: List[Dict],
+        citations: List,
+        original_query: str,
+        iterations_used: int,
+        resource_summary: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Format the final response with enhanced citations and resource tracking."""
+        
+        # Format enhanced citations
+        formatted_citations = format_citations_for_response(citations, style='legal')
+        
+        # Extract enhanced source information with precise citations
+        sources = []
+        for result, citation in zip(retrieval_results, citations):
+            chunk = result.get('chunk', {})
+            document = result.get('document', {})
+            
+            source = {
+                "document_name": document.get('filename') or document.get('title') or document.get('name') or 'Unknown Document',
+                "document_id": document.get('id'), 
+                "chunk_type": chunk.get('chunk_type', 'general'),
+                "similarity_score": result.get('similarity_score', 0.0),
+                "chunk_preview": chunk.get('text', '')[:200] + "..." if len(chunk.get('text', '')) > 200 else chunk.get('text', ''),
+                # Enhanced citation information
+                "article_number": citation.article_number,
+                "section_number": citation.section_number,
+                "paragraph_number": citation.paragraph_number,
+                "page_number": citation.page_number,
+                "date_mentioned": citation.date_mentioned,
+                "effective_date": citation.effective_date,
+                "formatted_citation": formatted_citations[sources.__len__()]  # Get corresponding citation
+            }
+            sources.append(source)
+        
+        # Generate bibliography
+        bibliography = generate_bibliography(citations)
+        
+        return {
+            "content": llm_response.content,
+            "sources": sources,
+            "citations": formatted_citations,
+            "bibliography": bibliography,
+            "query": original_query,
+            "model_used": llm_response.model,
+            "usage": llm_response.usage,
+            "iterations_used": iterations_used,
+            "total_chunks_found": len(retrieval_results),
+            "resource_usage": resource_summary,
+            "rag_approach": "iterative_adaptive",
+            "cache_stats": self.search_cache.get_stats(),
             "timestamp": datetime.utcnow().isoformat(),
             "error": False
         }

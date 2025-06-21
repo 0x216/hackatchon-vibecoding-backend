@@ -2,9 +2,24 @@
 class LegalRAGApp {
     constructor() {
         this.apiBase = 'http://localhost:8000';
-        this.selectedDocument = null;
+        this.selectedDocuments = new Set();
         this.currentSessionId = null;
         this.llmProvider = 'groq';
+        this.searchAllMode = false;
+        
+        // Pagination and filtering
+        this.currentPage = 1;
+        this.pageSize = 25;
+        this.totalDocuments = 0;
+        this.filteredDocuments = [];
+        this.allDocuments = [];
+        this.searchQuery = '';
+        this.statusFilter = '';
+        this.typeFilter = '';
+        this.sortBy = 'date_desc';
+        
+        // Selection state
+        this.lastSelectedIndex = -1;
         
         this.initializeElements();
         this.attachEventListeners();
@@ -18,13 +33,40 @@ class LegalRAGApp {
         this.fileInput = document.getElementById('fileInput');
         this.uploadBtn = document.getElementById('uploadBtn');
         this.documentsList = document.getElementById('documentsList');
+        this.documentCounter = document.getElementById('documentCounter');
+
+        // Upload progress elements
+        this.uploadProgress = document.getElementById('uploadProgress');
+        this.progressFill = document.getElementById('progressFill');
+        this.progressText = document.getElementById('progressText');
+
+        // Search and filter elements
+        this.documentSearch = document.getElementById('documentSearch');
+        this.clearSearch = document.getElementById('clearSearch');
+        this.statusFilterEl = document.getElementById('statusFilter');
+        this.typeFilterEl = document.getElementById('typeFilter');
+        this.sortByEl = document.getElementById('sortBy');
+
+        // Selection elements
+        this.selectAllBtn = document.getElementById('selectAllBtn');
+        this.clearSelectionBtn = document.getElementById('clearSelectionBtn');
+        this.bulkActions = document.getElementById('bulkActions');
+        this.deleteSelected = document.getElementById('deleteSelected');
+
+        // Pagination elements
+        this.pagination = document.getElementById('pagination');
+        this.prevPage = document.getElementById('prevPage');
+        this.nextPage = document.getElementById('nextPage');
+        this.pageInfo = document.getElementById('pageInfo');
+        this.pageSizeEl = document.getElementById('pageSize');
 
         // Chat elements
         this.chatMessages = document.getElementById('chatMessages');
         this.messageInput = document.getElementById('messageInput');
         this.sendBtn = document.getElementById('sendBtn');
         this.llmSelector = document.getElementById('llmProvider');
-        this.ragToggle = document.getElementById('ragToggle');
+
+
 
         // UI elements
         this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -39,7 +81,24 @@ class LegalRAGApp {
         this.uploadZone.addEventListener('dragover', (e) => this.handleDragOver(e));
         this.uploadZone.addEventListener('drop', (e) => this.handleDrop(e));
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
-        this.uploadBtn.addEventListener('click', () => this.uploadDocument());
+        this.uploadBtn.addEventListener('click', () => this.uploadDocuments());
+
+        // Search and filter
+        this.documentSearch.addEventListener('input', (e) => this.handleSearch(e.target.value));
+        this.clearSearch.addEventListener('click', () => this.clearSearchInput());
+        this.statusFilterEl.addEventListener('change', (e) => this.handleFilterChange('status', e.target.value));
+        this.typeFilterEl.addEventListener('change', (e) => this.handleFilterChange('type', e.target.value));
+        this.sortByEl.addEventListener('change', (e) => this.handleSortChange(e.target.value));
+
+        // Selection
+        this.selectAllBtn.addEventListener('click', () => this.selectAllDocuments());
+        this.clearSelectionBtn.addEventListener('click', () => this.clearSelection());
+        this.deleteSelected.addEventListener('click', () => this.deleteSelectedDocuments());
+
+        // Pagination
+        this.prevPage.addEventListener('click', () => this.changePage(this.currentPage - 1));
+        this.nextPage.addEventListener('click', () => this.changePage(this.currentPage + 1));
+        this.pageSizeEl.addEventListener('change', (e) => this.changePageSize(parseInt(e.target.value)));
 
         // Chat
         this.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -55,6 +114,8 @@ class LegalRAGApp {
             this.llmProvider = e.target.value;
             this.showToast(`Switched to ${e.target.options[e.target.selectedIndex].text}`, 'info');
         });
+
+
 
         // Quick questions
         document.querySelectorAll('.quick-btn').forEach(btn => {
@@ -111,11 +172,13 @@ class LegalRAGApp {
     }
 
     handleFileSelect(e) {
-        const file = e.target.files[0];
-        if (file) {
+        const files = e.target.files;
+        if (files.length > 0) {
             this.uploadBtn.disabled = false;
-            this.uploadZone.querySelector('p').innerHTML = 
-                `File selected: <strong>${file.name}</strong> (${this.formatFileSize(file.size)})`;
+            const fileText = files.length === 1 
+                ? `File selected: <strong>${files[0].name}</strong> (${this.formatFileSize(files[0].size)})`
+                : `<strong>${files.length} files</strong> selected (${this.formatTotalFileSize(files)})`;
+            this.uploadZone.querySelector('p').innerHTML = fileText;
         }
     }
 
@@ -127,193 +190,467 @@ class LegalRAGApp {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    async uploadDocument() {
-        const file = this.fileInput.files[0];
-        if (!file) return;
+    formatTotalFileSize(files) {
+        let totalSize = 0;
+        for (let file of files) {
+            totalSize += file.size;
+        }
+        return this.formatFileSize(totalSize);
+    }
 
-        this.showLoading('Uploading document...');
+    async uploadDocuments() {
+        const files = this.fileInput.files;
+        if (!files || files.length === 0) return;
 
-        const formData = new FormData();
-        formData.append('file', file);
+        // Show upload progress
+        this.showUploadProgress();
+        this.uploadBtn.disabled = true;
+
+        let completed = 0;
+        const total = files.length;
 
         try {
-            const response = await fetch(`${this.apiBase}/api/v1/documents/upload`, {
-                method: 'POST',
-                body: formData
-            });
+            const uploadPromises = [];
+            for (let file of files) {
+                const formData = new FormData();
+                formData.append('file', file);
 
-            const result = await response.json();
+                const uploadPromise = this.uploadSingleDocument(formData, file.name)
+                    .then(result => {
+                        completed++;
+                        this.updateUploadProgress(completed, total);
+                        return result;
+                    })
+                    .catch(error => {
+                        completed++;
+                        this.updateUploadProgress(completed, total);
+                        throw error;
+                    });
 
-            if (response.ok) {
-                this.showToast('Document uploaded successfully!', 'success');
+                uploadPromises.push(uploadPromise);
+            }
+
+            const results = await Promise.allSettled(uploadPromises);
+            const successful = results.filter(r => r.status === 'fulfilled').length;
+            const failed = results.filter(r => r.status === 'rejected').length;
+
+            if (successful > 0) {
+                this.showToast(`Successfully uploaded ${successful} document(s)!`, 'success');
                 this.resetUploadForm();
                 this.loadDocuments();
-            } else {
-                throw new Error(result.detail || 'Upload error');
+            }
+
+            if (failed > 0) {
+                this.showToast(`Failed to upload ${failed} document(s)`, 'error');
             }
         } catch (error) {
             this.showToast(`Upload error: ${error.message}`, 'error');
         } finally {
-            this.hideLoading();
+            this.hideUploadProgress();
+            this.uploadBtn.disabled = false;
         }
+    }
+
+    async uploadSingleDocument(formData, filename) {
+        const response = await fetch(`${this.apiBase}/api/v1/documents/upload`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`${filename}: ${result.detail || 'Upload error'}`);
+        }
+
+        return result;
     }
 
     resetUploadForm() {
         this.fileInput.value = '';
         this.uploadBtn.disabled = true;
-        this.uploadZone.querySelector('p').innerHTML = 
-            'Drag document here or <span class="upload-text">choose file</span>';
+        this.uploadZone.querySelector('p').innerHTML =
+            'Drag documents here or <span class="upload-text">choose files</span>';
+    }
+
+    showUploadProgress() {
+        this.uploadProgress.style.display = 'block';
+        this.progressFill.style.width = '0%';
+        this.progressText.textContent = 'Starting upload...';
+    }
+
+    updateUploadProgress(completed, total) {
+        const percentage = Math.round((completed / total) * 100);
+        this.progressFill.style.width = `${percentage}%`;
+        this.progressText.textContent = `Uploading documents... ${completed}/${total} (${percentage}%)`;
+    }
+
+    hideUploadProgress() {
+        this.uploadProgress.style.display = 'none';
+    }
+
+    // Search and Filter Functions
+    handleSearch(query) {
+        this.searchQuery = query.toLowerCase();
+        this.clearSearch.style.display = query ? 'block' : 'none';
+        this.currentPage = 1;
+        this.applyFiltersAndPagination();
+    }
+
+    clearSearchInput() {
+        this.documentSearch.value = '';
+        this.searchQuery = '';
+        this.clearSearch.style.display = 'none';
+        this.currentPage = 1;
+        this.applyFiltersAndPagination();
+    }
+
+    handleFilterChange(type, value) {
+        if (type === 'status') {
+            this.statusFilter = value;
+        } else if (type === 'type') {
+            this.typeFilter = value;
+        }
+        this.currentPage = 1;
+        this.applyFiltersAndPagination();
+    }
+
+    handleSortChange(sortBy) {
+        this.sortBy = sortBy;
+        this.applyFiltersAndPagination();
+    }
+
+    applyFiltersAndPagination() {
+        // Filter documents
+        this.filteredDocuments = this.allDocuments.filter(doc => {
+            // Search filter
+            if (this.searchQuery && !doc.filename.toLowerCase().includes(this.searchQuery)) {
+                return false;
+            }
+
+            // Status filter
+            if (this.statusFilter && doc.processing_status !== this.statusFilter) {
+                return false;
+            }
+
+            // Type filter
+            if (this.typeFilter) {
+                const extension = doc.filename.split('.').pop().toLowerCase();
+                if (extension !== this.typeFilter) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        // Sort documents
+        this.filteredDocuments.sort((a, b) => {
+            switch (this.sortBy) {
+                case 'date_desc':
+                    return new Date(b.uploaded_at) - new Date(a.uploaded_at);
+                case 'date_asc':
+                    return new Date(a.uploaded_at) - new Date(b.uploaded_at);
+                case 'name_asc':
+                    return a.filename.localeCompare(b.filename);
+                case 'name_desc':
+                    return b.filename.localeCompare(a.filename);
+                case 'size_desc':
+                    return (b.file_size || 0) - (a.file_size || 0);
+                case 'size_asc':
+                    return (a.file_size || 0) - (b.file_size || 0);
+                default:
+                    return 0;
+            }
+        });
+
+        this.totalDocuments = this.filteredDocuments.length;
+        this.renderDocuments();
+        this.updatePagination();
+    }
+
+    // Pagination Functions
+    changePage(page) {
+        const maxPage = Math.ceil(this.totalDocuments / this.pageSize);
+        if (page >= 1 && page <= maxPage) {
+            this.currentPage = page;
+            this.renderDocuments();
+            this.updatePagination();
+        }
+    }
+
+    changePageSize(newSize) {
+        this.pageSize = newSize;
+        this.currentPage = 1;
+        this.renderDocuments();
+        this.updatePagination();
+    }
+
+    updatePagination() {
+        const maxPage = Math.ceil(this.totalDocuments / this.pageSize);
+        
+        this.prevPage.disabled = this.currentPage <= 1;
+        this.nextPage.disabled = this.currentPage >= maxPage;
+        
+        this.pageInfo.textContent = `Page ${this.currentPage} of ${maxPage}`;
+        
+        this.pagination.style.display = maxPage > 1 ? 'flex' : 'none';
     }
 
     // Documents Management
     async loadDocuments() {
         try {
-            const response = await fetch(`${this.apiBase}/api/v1/documents/`);
+            // Load all documents (no pagination on API level for now)
+            const response = await fetch(`${this.apiBase}/api/v1/documents/?limit=1000`);
             const data = await response.json();
 
             if (response.ok) {
-                this.renderDocuments(data.documents);
-                
+                this.allDocuments = data.documents || [];
+                this.applyFiltersAndPagination();
+                this.updateDocumentCounter();
+
                 // Check if there are documents still processing
-                const hasProcessingDocs = data.documents.some(doc => 
+                const hasProcessingDocs = this.allDocuments.some(doc =>
                     doc.processing_status === 'processing' || doc.processing_status === 'pending'
                 );
-                
+
                 if (hasProcessingDocs) {
                     // Auto-refresh every 3 seconds if documents are still processing
                     setTimeout(() => this.loadDocuments(), 3000);
                 }
-                
+
                 // Auto-enable chat if documents are available
-                if (data.documents && data.documents.length > 0) {
+                if (this.allDocuments.length > 0) {
                     setTimeout(() => {
-                        if (!this.selectedDocument) {
-                            this.selectDocument(data.documents[0].id, data.documents[0].filename);
+                        if (this.selectedDocuments.size === 0) {
+                            // Select first document if none selected
+                            this.selectedDocuments.add(this.allDocuments[0].id);
+                            this.updateSelectionDisplay();
                         }
                         this.enableChat();
                     }, 500);
                 }
             } else {
-                throw new Error('Error loading documents');
+                throw new Error(`API Error: ${response.status} - ${data.detail || 'Unknown error'}`);
             }
         } catch (error) {
             console.error('Error loading documents:', error);
+            this.showToast(`Error loading documents: ${error.message}`, 'error');
         }
     }
 
-    renderDocuments(documents) {
-        const container = this.documentsList;
-        
-        if (documents.length === 0) {
-            container.innerHTML = `
+    updateDocumentCounter() {
+        const total = this.allDocuments.length;
+        const text = total === 1 ? '1 document' : `${total} documents`;
+        this.documentCounter.querySelector('span').textContent = text;
+    }
+
+    renderDocuments() {
+        const startIndex = (this.currentPage - 1) * this.pageSize;
+        const endIndex = startIndex + this.pageSize;
+        const documentsToShow = this.filteredDocuments.slice(startIndex, endIndex);
+
+        if (documentsToShow.length === 0) {
+            this.documentsList.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-folder-open"></i>
-                    <p>No documents uploaded</p>
+                    <p>${this.allDocuments.length === 0 ? 'No documents uploaded' : 'No documents match your filters'}</p>
                 </div>
             `;
             return;
         }
 
-        container.innerHTML = documents.map(doc => `
-            <div class="document-item" data-id="${doc.id}">
-                <div class="document-content">
-                    <div class="document-name">${doc.filename}</div>
-                    <div class="document-meta">
-                        ${new Date(doc.upload_date).toLocaleDateString('ru-RU')} • ${this.formatFileSize(doc.file_size)}
-                        <span class="document-status status-${doc.processing_status}">
-                            ${this.getStatusText(doc.processing_status)}
-                        </span>
+        this.documentsList.innerHTML = documentsToShow.map((doc, index) => {
+            const actualIndex = startIndex + index;
+            const isSelected = this.selectedDocuments.has(doc.id);
+
+            return `
+                <div class="document-item ${isSelected ? 'selected' : ''}"
+                     data-document-id="${doc.id}"
+                     data-index="${actualIndex}">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''}
+                           onclick="event.stopPropagation()">
+                    <div class="document-content">
+                        <div class="document-name">${doc.filename}</div>
+                        <div class="document-meta">
+                            <div>
+                                <span class="document-status ${this.getStatusClass(doc.processing_status)}">
+                                    ${this.getStatusText(doc.processing_status)}
+                                </span>
+                                ${doc.file_size ? `• ${this.formatFileSize(doc.file_size)}` : ''}
+                            </div>
+                            <div>
+                                Uploaded: ${new Date(doc.uploaded_at).toLocaleDateString()}
+                                ${doc.chunk_count ? `• ${doc.chunk_count} chunks` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="document-actions">
+                        <button class="btn-delete" onclick="app.deleteDocument('${doc.id}', '${doc.filename}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
                     </div>
                 </div>
-                <div class="document-actions">
-                    <button class="btn-delete" onclick="app.deleteDocument('${doc.id}', '${doc.filename}')" title="Delete document">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
 
         // Add click event listeners to document items
-        document.querySelectorAll('.document-item').forEach(item => {
-            item.addEventListener('click', (event) => {
-                const docId = item.dataset.id;
-                const filename = item.querySelector('.document-name').textContent;
-                this.selectDocument(docId, filename, event);
-            });
+        this.documentsList.querySelectorAll('.document-item').forEach(item => {
+            item.addEventListener('click', (e) => this.handleDocumentClick(e));
+            
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            checkbox.addEventListener('change', (e) => this.handleCheckboxChange(e));
         });
-
-        // Enable chat if documents are available
-        this.enableChat();
     }
 
-    getStatusText(status) {
-        const statusMap = {
-            'completed': 'Completed ✅',
-            'processed': 'Processed ✅',
-            'processing': 'Processing ⏳',
-            'pending': 'Pending ⏸️',
-            'failed': 'Failed ❌'
-        };
-        return statusMap[status] || status;
-    }
+    handleDocumentClick(e) {
+        const item = e.currentTarget;
+        const documentId = item.dataset.documentId;
+        const index = parseInt(item.dataset.index);
+        const isCtrlPressed = e.ctrlKey || e.metaKey;
+        const isShiftPressed = e.shiftKey;
 
-    selectDocument(documentId, filename, event) {
-        const documentItem = document.querySelector(`[data-id="${documentId}"]`);
-        
-        // Initialize selectedDocuments array if not exists
-        if (!this.selectedDocuments) {
-            this.selectedDocuments = [];
-        }
-
-        // Check if Ctrl/Cmd key is pressed for multiple selection
-        if (event && (event.ctrlKey || event.metaKey)) {
+        if (isShiftPressed && this.lastSelectedIndex !== -1) {
+            // Range selection
+            const start = Math.min(this.lastSelectedIndex, index);
+            const end = Math.max(this.lastSelectedIndex, index);
+            
+            for (let i = start; i <= end; i++) {
+                if (i < this.filteredDocuments.length) {
+                    this.selectedDocuments.add(this.filteredDocuments[i].id);
+                }
+            }
+        } else if (isCtrlPressed) {
             // Toggle selection
-            if (documentItem.classList.contains('selected')) {
-                documentItem.classList.remove('selected');
-                this.selectedDocuments = this.selectedDocuments.filter(doc => doc.id !== documentId);
-                this.showToast(`Deselected document: ${filename}`, 'info');
+            if (this.selectedDocuments.has(documentId)) {
+                this.selectedDocuments.delete(documentId);
             } else {
-                documentItem.classList.add('selected');
-                this.selectedDocuments.push({ id: documentId, filename });
-                this.showToast(`Added document: ${filename}`, 'info');
+                this.selectedDocuments.add(documentId);
             }
         } else {
-            // Single selection (clear all others)
-            document.querySelectorAll('.document-item').forEach(item => {
-                item.classList.remove('selected');
-            });
-            documentItem.classList.add('selected');
-            this.selectedDocuments = [{ id: documentId, filename }];
-            this.showToast(`Selected document: ${filename}`, 'info');
+            // Single selection
+            this.selectedDocuments.clear();
+            this.selectedDocuments.add(documentId);
         }
 
-        // Update selected document for backward compatibility
-        this.selectedDocument = this.selectedDocuments.length > 0 ? this.selectedDocuments[0] : null;
-        
-        // Reset chat session when selection changes
-        this.currentSessionId = null;
+        this.lastSelectedIndex = index;
+        this.updateSelectionDisplay();
+    }
 
-        // Update UI to show selection count
+    handleCheckboxChange(e) {
+        const item = e.target.closest('.document-item');
+        const documentId = item.dataset.documentId;
+        
+        if (e.target.checked) {
+            this.selectedDocuments.add(documentId);
+        } else {
+            this.selectedDocuments.delete(documentId);
+        }
+        
         this.updateSelectionDisplay();
     }
 
     updateSelectionDisplay() {
-        const count = this.selectedDocuments ? this.selectedDocuments.length : 0;
-        const selectionInfo = document.querySelector('.selection-info');
-        if (selectionInfo) {
-            if (count > 1) {
-                selectionInfo.textContent = `${count} documents selected`;
-                selectionInfo.style.display = 'block';
-            } else {
-                selectionInfo.style.display = 'none';
-            }
+        // Update visual selection
+        this.documentsList.querySelectorAll('.document-item').forEach(item => {
+            const documentId = item.dataset.documentId;
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            const isSelected = this.selectedDocuments.has(documentId);
+
+            item.classList.toggle('selected', isSelected);
+            checkbox.checked = isSelected;
+        });
+
+        // Update selection controls
+        const selectedCount = this.selectedDocuments.size;
+        this.bulkActions.style.display = selectedCount > 0 ? 'flex' : 'none';
+        this.clearSelectionBtn.style.display = selectedCount > 0 ? 'inline-flex' : 'none';
+
+        // Update chat placeholder
+        this.enableChat();
+    }
+
+    selectAllDocuments() {
+        const documentsOnPage = this.filteredDocuments.slice(
+            (this.currentPage - 1) * this.pageSize,
+            this.currentPage * this.pageSize
+        );
+        
+        documentsOnPage.forEach(doc => {
+            this.selectedDocuments.add(doc.id);
+        });
+        
+        this.updateSelectionDisplay();
+    }
+
+    clearSelection() {
+        this.selectedDocuments.clear();
+        this.updateSelectionDisplay();
+    }
+
+    async deleteSelectedDocuments() {
+        if (this.selectedDocuments.size === 0) return;
+
+        const confirmed = confirm(`Are you sure you want to delete ${this.selectedDocuments.size} document(s)?`);
+        if (!confirmed) return;
+
+        this.showLoading('Deleting documents...');
+
+        try {
+            const deletePromises = Array.from(this.selectedDocuments).map(docId => 
+                fetch(`${this.apiBase}/api/v1/documents/${docId}`, { method: 'DELETE' })
+            );
+
+            await Promise.all(deletePromises);
+            
+            this.showToast(`Deleted ${this.selectedDocuments.size} document(s)`, 'success');
+            this.selectedDocuments.clear();
+            this.loadDocuments();
+        } catch (error) {
+            this.showToast('Error deleting documents', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+
+
+
+
+    getStatusClass(status) {
+        switch (status) {
+            case 'completed':
+            case 'ready':
+                return 'status-completed';
+            case 'processing':
+                return 'status-processing';
+            case 'pending':
+                return 'status-pending';
+            case 'failed':
+                return 'status-failed';
+            default:
+                return 'status-pending';
+        }
+    }
+
+    getStatusText(status) {
+        switch (status) {
+            case 'completed':
+                return 'Ready';
+            case 'processing':
+                return 'Processing...';
+            case 'pending':
+                return 'Pending';
+            case 'failed':
+                return 'Failed';
+            default:
+                return 'Unknown';
         }
     }
 
     async deleteDocument(documentId, filename) {
-        if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
-            return;
-        }
+        const confirmed = confirm(`Are you sure you want to delete "${filename}"?`);
+        if (!confirmed) return;
 
         this.showLoading('Deleting document...');
 
@@ -323,99 +660,102 @@ class LegalRAGApp {
             });
 
             if (response.ok) {
-                this.showToast(`Document "${filename}" deleted successfully`, 'success');
-                
-                // Remove from selected documents if it was selected
-                if (this.selectedDocuments) {
-                    this.selectedDocuments = this.selectedDocuments.filter(doc => doc.id !== documentId);
-                }
-                
-                // Update selected document if it was the deleted one
-                if (this.selectedDocument && this.selectedDocument.id === documentId) {
-                    this.selectedDocument = null;
-                }
-                
-                // Reload documents list
-                await this.loadDocuments();
-                
+                this.showToast('Document deleted successfully!', 'success');
+                this.selectedDocuments.delete(documentId);
+                this.loadDocuments();
             } else {
                 const error = await response.json();
-                throw new Error(error.detail || 'Failed to delete document');
+                throw new Error(error.detail || 'Delete error');
             }
         } catch (error) {
-            this.showToast(`Failed to delete document: ${error.message}`, 'error');
+            this.showToast(`Delete error: ${error.message}`, 'error');
         } finally {
             this.hideLoading();
         }
     }
 
     enableChat() {
-        this.messageInput.disabled = false;
-        this.sendBtn.disabled = false;
-        this.messageInput.placeholder = "Ask a question about the uploaded document...";
+        const hasDocuments = this.allDocuments.length > 0;
+        const hasSelected = this.selectedDocuments.size > 0 || this.searchAllMode;
         
-        document.querySelectorAll('.quick-btn').forEach(btn => {
-            btn.disabled = false;
-        });
+        this.messageInput.disabled = !hasDocuments;
+        this.sendBtn.disabled = !hasDocuments;
+        
+        if (hasDocuments) {
+            const placeholder = this.selectedDocuments.size > 0
+                ? `Ask a question about ${this.selectedDocuments.size} selected document(s)...`
+                : 'Ask a question about the documents...';
+            this.messageInput.placeholder = placeholder;
+        }
     }
 
-    // Chat Functionality
     async sendMessage() {
         const message = this.messageInput.value.trim();
         if (!message) return;
 
-        if (!this.selectedDocument) {
-            // Auto-select first document if available
-            const firstDoc = document.querySelector('.document-item');
-            if (firstDoc) {
-                const docId = firstDoc.dataset.id;
-                const filename = firstDoc.querySelector('.document-name').textContent;
-                this.selectDocument(docId, filename);
-                this.enableChat();
-            } else {
-                this.showToast('Please select a document first', 'error');
-                return;
-            }
+        // Determine which documents to search
+        let documentIds = [];
+        if (this.selectedDocuments.size > 0) {
+            documentIds = Array.from(this.selectedDocuments);
+        } else {
+            // If no documents selected, use all completed documents
+            documentIds = this.allDocuments.filter(doc => doc.processing_status === 'completed').map(doc => doc.id);
         }
 
-        // Add user message to chat
+        if (documentIds.length === 0) {
+            this.showToast('No documents available for search', 'error');
+            return;
+        }
+
+        // Add user message
         this.addMessage(message, 'user');
         this.messageInput.value = '';
 
-        // Show loading
+        // Add loading message
         const loadingId = this.addLoadingMessage();
-        
+
         try {
-            const response = await fetch(`${this.apiBase}/api/v1/chat/query`, {
+            // Always use iterative RAG
+            const endpoint = '/api/v1/chat/iterative';
+            
+            const requestBody = {
+                message: message,
+                document_ids: documentIds,
+                llm_provider: this.llmProvider,
+                session_id: this.currentSessionId
+            };
+
+            const response = await fetch(`${this.apiBase}${endpoint}`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    message: message,
-                    session_id: this.currentSessionId,
-                    llm_provider: this.llmProvider,
-                    document_ids: this.selectedDocuments ? this.selectedDocuments.map(doc => doc.id) : [],
-                    use_iterative_rag: this.ragToggle.checked,
-                    max_iterations: 3
-                })
+                body: JSON.stringify(requestBody)
             });
 
-            const result = await response.json();
-
-            // Remove loading message
-            this.removeLoadingMessage(loadingId);
+            const data = await response.json();
 
             if (response.ok) {
-                this.currentSessionId = result.session_id;
-                this.addMessage(result.message, 'bot', result.sources, result);
+                this.currentSessionId = data.session_id;
+                
+                // Remove loading message
+                this.removeLoadingMessage(loadingId);
+                
+                // Add bot response
+                this.addMessage(data.response, 'bot', data.sources || [], data.metadata);
+                
+                // Show success toast with stats
+                if (data.metadata) {
+                    const stats = data.metadata.search_stats || {};
+                    this.showToast(`Response generated using ${stats.total_chunks || 'unknown'} chunks from ${documentIds.length} document(s)`, 'info');
+                }
             } else {
-                throw new Error(result.detail || 'Request error');
+                throw new Error(data.detail || 'Chat error');
             }
         } catch (error) {
             this.removeLoadingMessage(loadingId);
-            this.addMessage(`Sorry, an error occurred: ${error.message}`, 'bot', [], null, true);
-            this.showToast('Error processing request', 'error');
+            this.addMessage(`Error: ${error.message}`, 'bot', [], null, true);
+            this.showToast(`Chat error: ${error.message}`, 'error');
         }
     }
 
@@ -423,107 +763,131 @@ class LegalRAGApp {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}-message`;
         
-        const time = new Date().toLocaleTimeString('ru-RU', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
-
+        const timestamp = new Date().toLocaleTimeString();
+        const avatarIcon = type === 'user' ? 'fas fa-user' : 'fas fa-robot';
+        
         let sourcesHtml = '';
         if (sources && sources.length > 0) {
             sourcesHtml = `
                 <div class="message-sources">
-                    <h4><i class="fas fa-link"></i> Sources:</h4>
-                    ${sources.map(source => `
-                        <div class="source-item">
-                            <div class="source-doc">${source.document_name || 'Unknown Document'}</div>
-                            <div class="source-type">${source.chunk_type || 'general'} • Relevance: ${(source.similarity_score * 100).toFixed(1)}%</div>
-                            <div class="source-preview">${source.chunk_preview || 'No preview available'}</div>
-                        </div>
-                    `).join('')}
+                    <h4><i class="fas fa-link"></i> Sources (${sources.length})</h4>
+                    ${sources.map(source => this.formatSource(source)).join('')}
                 </div>
             `;
         }
 
+        // Format metadata if available
         let metadataHtml = '';
-        if (metadata && metadata.model_used) {
-            const ragInfo = metadata.rag_approach ? 
-                `<span class="rag-info ${metadata.rag_approach}">
-                    <i class="fas fa-${metadata.rag_approach === 'iterative' ? 'sync' : 'search'}"></i>
-                    ${metadata.rag_approach} RAG
-                    ${metadata.iterations_used ? ` (${metadata.iterations_used} iter)` : ''}
-                </span>` : '';
-            
+        if (metadata && metadata.search_stats) {
+            const stats = metadata.search_stats;
             metadataHtml = `
-                <div class="message-time">
-                    ${time} • ${metadata.model_used}
-                    ${metadata.usage ? ` • ${metadata.usage.total_tokens} tokens` : ''}
-                    ${ragInfo}
+                <div class="search-metadata">
+                    <small>
+                        <i class="fas fa-chart-bar"></i>
+                        Search: ${stats.total_chunks || 0} chunks from ${stats.documents_searched || 0} documents
+                        ${stats.iterations_used ? `• ${stats.iterations_used} iterations` : ''}
+                        ${stats.search_time ? `• ${(stats.search_time * 1000).toFixed(0)}ms` : ''}
+                    </small>
                 </div>
             `;
-        } else {
-            metadataHtml = `<div class="message-time">${time}</div>`;
-        }
-
-        // Process content as markdown for bot messages
-        let processedContent = content;
-        if (type === 'bot' && !isError) {
-            try {
-                // Configure marked with syntax highlighting
-                if (typeof marked !== 'undefined') {
-                    marked.setOptions({
-                        highlight: function(code, lang) {
-                            if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-                                try {
-                                    return hljs.highlight(code, { language: lang }).value;
-                                } catch (__) {}
-                            }
-                            return code;
-                        },
-                        breaks: true,
-                        gfm: true
-                    });
-                    processedContent = `<div class="markdown-content">${marked.parse(content)}</div>`;
-                } else {
-                    // Fallback: at least handle line breaks
-                    processedContent = `<div class="markdown-content">${content.replace(/\n/g, '<br>')}</div>`;
-                }
-            } catch (e) {
-                // Fallback to plain text with line breaks
-                processedContent = `<div class="markdown-content">${content.replace(/\n/g, '<br>')}</div>`;
-            }
-        } else {
-            // For user messages, just handle line breaks
-            processedContent = content.replace(/\n/g, '<br>');
         }
 
         messageDiv.innerHTML = `
             <div class="message-avatar">
-                <i class="fas fa-${type === 'user' ? 'user' : 'robot'}"></i>
+                <i class="${avatarIcon}"></i>
             </div>
-            <div class="message-content ${isError ? 'error' : ''}">
-                ${type === 'bot' && !isError ? processedContent : `<p>${processedContent}</p>`}
+            <div class="message-content">
+                <div class="markdown-content">${type === 'user' ? this.escapeHtml(content) : marked.parse(content)}</div>
                 ${sourcesHtml}
                 ${metadataHtml}
+                <div class="message-time">${timestamp}</div>
             </div>
         `;
 
+        if (isError) {
+            messageDiv.classList.add('error-message');
+        }
+
         this.chatMessages.appendChild(messageDiv);
         this.scrollToBottom();
+
+        // Highlight code blocks
+        messageDiv.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+        });
+    }
+
+    formatSource(source) {
+        // Handle both old and new source formats
+        const doc = source.document || {};
+        const chunk = source.chunk || {};
+
+        // Get document name from various possible fields
+        const documentName = source.document_name ||
+                            doc.filename ||
+                            doc.name ||
+                            doc.title ||
+                            'Unknown Document';
+
+        const relevanceScore = Math.round((source.similarity_score || 0) * 100);
+
+        // Get chunk content from various possible fields
+        const chunkContent = source.chunk_preview ||
+                           chunk.content ||
+                           chunk.text ||
+                           '';
+
+        const chunkType = source.chunk_type || chunk.chunk_type || 'content';
+        const pageNumber = source.page_number || chunk.page_number;
+        const sectionTitle = source.section_title || chunk.section_title;
+
+        return `
+            <div class="source-item">
+                <div class="source-header">
+                    <div class="source-doc">
+                        <i class="fas fa-file-text"></i>
+                        <span>${documentName}</span>
+                    </div>
+                    <div class="source-relevance">${relevanceScore}% match</div>
+                </div>
+                <div class="source-meta">
+                    <span class="source-type">${chunkType}</span>
+                    ${pageNumber ? `Page ${pageNumber}` : ''}
+                    ${sectionTitle ? `• ${sectionTitle}` : ''}
+                </div>
+                ${chunkContent ? `<div class="source-preview">${this.truncateText(chunkContent, 200)}</div>` : ''}
+            </div>
+        `;
+    }
+
+    truncateText(text, maxLength) {
+        if (text.length <= maxLength) return this.escapeHtml(text);
+        return this.escapeHtml(text.substring(0, maxLength)) + '...';
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     addLoadingMessage() {
-        const loadingId = Date.now();
+        const loadingId = 'loading-' + Date.now();
         const messageDiv = document.createElement('div');
-        messageDiv.className = 'message bot-message';
-        messageDiv.id = `loading-${loadingId}`;
+        messageDiv.className = 'message bot-message loading-message';
+        messageDiv.id = loadingId;
         
         messageDiv.innerHTML = `
             <div class="message-avatar">
                 <i class="fas fa-robot"></i>
             </div>
             <div class="message-content">
-                <div class="spinner" style="width: 20px; height: 20px; margin: 0;"></div>
-                <p style="margin-left: 30px; margin-top: -20px;">Processing request...</p>
+                <div class="typing-indicator">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="message-time">Thinking...</div>
             </div>
         `;
 
@@ -534,9 +898,9 @@ class LegalRAGApp {
     }
 
     removeLoadingMessage(loadingId) {
-        const loadingElement = document.getElementById(`loading-${loadingId}`);
-        if (loadingElement) {
-            loadingElement.remove();
+        const loadingMessage = document.getElementById(loadingId);
+        if (loadingMessage) {
+            loadingMessage.remove();
         }
     }
 
@@ -544,7 +908,6 @@ class LegalRAGApp {
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
 
-    // UI Helpers
     showLoading(text = 'Loading...') {
         this.loadingText.textContent = text;
         this.loadingOverlay.classList.add('show');
@@ -557,37 +920,31 @@ class LegalRAGApp {
     showToast(message, type = 'info') {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
-        
-        const icon = {
-            'success': 'check-circle',
-            'error': 'exclamation-circle',
-            'info': 'info-circle'
-        }[type] || 'info-circle';
-
-        toast.innerHTML = `
-            <i class="fas fa-${icon}"></i>
-            <span>${message}</span>
-        `;
+        toast.textContent = message;
 
         this.toastContainer.appendChild(toast);
 
-        // Auto remove after 3 seconds
+        // Auto remove after 5 seconds
         setTimeout(() => {
-            toast.style.animation = 'slideInRight 0.3s ease reverse';
-            setTimeout(() => toast.remove(), 300);
-        }, 3000);
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 5000);
+
+        // Remove on click
+        toast.addEventListener('click', () => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        });
     }
 }
 
-// Initialize app when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    window.app = new LegalRAGApp();
-});
+// Initialize the app
+const app = new LegalRAGApp();
 
-// Demo mode for testing without documents
+// Demo mode function for testing
 function enableDemoMode() {
-    const app = window.app;
-    app.selectedDocument = { id: 'demo', filename: 'Demo document' };
-    app.enableChat();
-    app.showToast('Demo mode activated!', 'info');
-} 
+    console.log('Demo mode enabled');
+    app.showToast('Demo mode enabled - using mock data', 'info');
+}

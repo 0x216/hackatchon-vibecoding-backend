@@ -9,10 +9,143 @@ from app.db.connection import get_db
 from app.db.models import ChatSession, ChatMessage
 from app.core.chat.generator import RAGGenerator
 from app.core.chat.iterative_rag import IterativeRAGGenerator
+from app.core.chat.search_cache import get_search_cache
+from app.core.chat.adaptive_limits import create_adaptive_limits_manager
 from app.core.chat.enhanced_retriever import EnhancedDocumentRetriever
 from app.core.chat.llm_client import LLMClientFactory
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def resolve_version_aware_documents(request: 'ChatRequest', db: AsyncSession) -> List[str]:
+    """Resolve document IDs based on version-aware search parameters."""
+
+    if request.specific_versions:
+        # Use specific version IDs
+        return request.specific_versions
+
+    if request.document_ids:
+        # Use provided document IDs, but filter by version mode
+        if request.version_mode == "latest":
+            # Get latest versions of the provided documents
+            result = await db.execute(
+                text("""
+                SELECT DISTINCT COALESCE(d.document_family_id, d.id) as family_id
+                FROM documents d
+                WHERE d.id = ANY(:doc_ids)
+                """),
+                {"doc_ids": request.document_ids}
+            )
+
+            family_ids = [str(row.family_id) for row in result.fetchall()]
+
+            # Get latest versions for each family
+            latest_result = await db.execute(
+                text("""
+                SELECT d.id
+                FROM documents d
+                WHERE (d.document_family_id = ANY(:family_ids) OR d.id = ANY(:family_ids))
+                AND d.is_latest_version = TRUE
+                AND d.processing_status = 'processed'
+                """),
+                {"family_ids": family_ids}
+            )
+
+            return [str(row.id) for row in latest_result.fetchall()]
+        else:
+            # Return all provided documents
+            return request.document_ids
+
+    if request.family_ids:
+        # Get documents from specific families
+        if request.version_mode == "latest":
+            result = await db.execute(
+                text("""
+                SELECT d.id
+                FROM documents d
+                WHERE (d.document_family_id = ANY(:family_ids) OR d.id = ANY(:family_ids))
+                AND d.is_latest_version = TRUE
+                AND d.processing_status = 'processed'
+                """),
+                {"family_ids": request.family_ids}
+            )
+        else:
+            result = await db.execute(
+                text("""
+                SELECT d.id
+                FROM documents d
+                WHERE (d.document_family_id = ANY(:family_ids) OR d.id = ANY(:family_ids))
+                AND d.processing_status = 'processed'
+                """),
+                {"family_ids": request.family_ids}
+            )
+
+        return [str(row.id) for row in result.fetchall()]
+
+    # Default: get all documents based on version mode
+    if request.version_mode == "latest":
+        result = await db.execute(
+            text("""
+            SELECT d.id
+            FROM documents d
+            WHERE d.is_latest_version = TRUE
+            AND d.processing_status = 'processed'
+            """)
+        )
+    else:
+        result = await db.execute(
+            text("""
+            SELECT d.id
+            FROM documents d
+            WHERE d.processing_status = 'processed'
+            """)
+        )
+
+    return [str(row.id) for row in result.fetchall()]
+
+
+async def add_version_context(response_data: dict, document_ids: List[str], db: AsyncSession) -> dict:
+    """Add version context information to the response."""
+
+    if not document_ids:
+        return response_data
+
+    # Get version information for the documents used
+    result = await db.execute(
+        text("""
+        SELECT d.id, d.filename, d.version_number, d.document_family_id,
+               d.is_latest_version, d.upload_date, dv.version_tag, dv.author
+        FROM documents d
+        LEFT JOIN document_versions dv ON d.id = dv.document_id
+        WHERE d.id = ANY(:doc_ids)
+        """),
+        {"doc_ids": document_ids}
+    )
+
+    version_info = []
+    for row in result.fetchall():
+        version_info.append({
+            "document_id": str(row.id),
+            "filename": row.filename,
+            "version_number": row.version_number,
+            "family_id": str(row.document_family_id) if row.document_family_id else None,
+            "is_latest": row.is_latest_version,
+            "upload_date": row.upload_date.isoformat(),
+            "version_tag": row.version_tag,
+            "author": row.author
+        })
+
+    response_data["version_context"] = {
+        "documents_used": version_info,
+        "total_documents": len(version_info),
+        "latest_only": all(doc["is_latest"] for doc in version_info),
+        "families_represented": len(set(doc["family_id"] for doc in version_info if doc["family_id"]))
+    }
+
+    return response_data
 
 
 class ChatRequest(BaseModel):
@@ -22,12 +155,21 @@ class ChatRequest(BaseModel):
     document_ids: Optional[List[str]] = []
     use_iterative_rag: bool = True
     max_iterations: int = 3
+    # Version-aware search parameters
+    version_mode: str = "latest"  # 'latest', 'all', 'specific', 'family'
+    specific_versions: Optional[List[str]] = None  # Specific version IDs
+    family_ids: Optional[List[str]] = None  # Document family IDs
+    include_version_context: bool = True  # Include version info in responses
 
 
 class ChatResponse(BaseModel):
-    message: str
+    response: str  # Changed from 'message' to 'response' for frontend compatibility
     session_id: str
     sources: List[dict] = []
+    metadata: Optional[dict] = None
+    
+    # Legacy fields for backward compatibility
+    message: Optional[str] = None
     model_used: Optional[str] = None
     usage: Optional[dict] = None
     rag_approach: str = "traditional"
@@ -82,36 +224,66 @@ async def chat_query(
             elif row.message_type == "assistant" and conversation_history:
                 conversation_history[-1]["assistant_message"] = row.content
         
+        # Resolve document IDs based on version mode
+        resolved_document_ids = await resolve_version_aware_documents(request, db)
+
         # Initialize LLM client
         llm_client = LLMClientFactory.create_client(request.llm_provider or "groq")
-        
+
         # Choose RAG approach based on request
         if request.use_iterative_rag:
             # Use Iterative RAG for complex queries
             retriever = EnhancedDocumentRetriever()
             rag_generator = IterativeRAGGenerator(llm_client=llm_client, retriever=retriever)
-            
+
             rag_response = await rag_generator.generate_response(
                 query=request.message,
                 session_id=session_id,
                 max_iterations=request.max_iterations,
-                document_ids=request.document_ids or []
+                document_ids=resolved_document_ids
             )
         else:
             # Use Traditional RAG for simple queries
             rag_generator = RAGGenerator(llm_client=llm_client)
-            
+
             rag_response = await rag_generator.generate_response(
                 query=request.message,
                 session_id=session_id,
                 conversation_history=conversation_history,
-                document_ids=request.document_ids or []
+                document_ids=resolved_document_ids
             )
+
+        # Add version context if requested
+        if request.include_version_context:
+            rag_response = await add_version_context(rag_response, resolved_document_ids, db)
+        
+        # Prepare metadata
+        metadata = {
+            "model_used": rag_response.get("model_used"),
+            "usage": rag_response.get("usage"),
+            "rag_approach": "iterative" if request.use_iterative_rag else "traditional",
+            "iterations_used": rag_response.get("iterations_used"),
+            "search_stats": {
+                "total_chunks": rag_response.get("total_chunks_found"),
+                "documents_searched": len(resolved_document_ids),
+                "iterations_used": rag_response.get("iterations_used"),
+                "search_time": rag_response.get("search_time")
+            },
+            "version_info": {
+                "version_mode": request.version_mode,
+                "documents_resolved": len(resolved_document_ids),
+                "original_document_count": len(request.document_ids or []),
+                "include_version_context": request.include_version_context,
+                "version_context": rag_response.get("version_context", {})
+            }
+        }
         
         return ChatResponse(
-            message=rag_response["content"],
+            response=rag_response["content"],
+            message=rag_response["content"],  # Legacy compatibility
             session_id=session_id,
             sources=rag_response.get("sources", []),
+            metadata=metadata,
             model_used=rag_response.get("model_used"),
             usage=rag_response.get("usage"),
             rag_approach="iterative" if request.use_iterative_rag else "traditional",
@@ -126,6 +298,97 @@ async def chat_query(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process chat query: {str(e)}"
+        )
+
+
+@router.post("/iterative", response_model=ChatResponse)
+async def chat_iterative_rag(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Process a chat query using Iterative RAG specifically."""
+    
+    try:
+        # Force iterative RAG
+        request.use_iterative_rag = True
+        
+        # Get or create session
+        session_id = request.session_id
+        if not session_id:
+            # Create new session
+            session = ChatSession()
+            db.add(session)
+            await db.commit()
+            await db.refresh(session)
+            session_id = str(session.id)
+        else:
+            # Verify session exists
+            result = await db.execute(
+                text("SELECT id FROM chat_sessions WHERE id = :id"),
+                {"id": session_id}
+            )
+            if not result.scalar():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Chat session not found"
+                )
+        
+        # Initialize LLM client
+        llm_client = LLMClientFactory.create_client(request.llm_provider or "groq")
+        
+        # Use Iterative RAG with enhanced features
+        retriever = EnhancedDocumentRetriever()
+        
+        rag_generator = IterativeRAGGenerator(
+            llm_client=llm_client,
+            retriever=retriever
+        )
+        
+        rag_response = await rag_generator.generate_response(
+            query=request.message,
+            session_id=session_id,
+            max_iterations=request.max_iterations,
+            document_ids=request.document_ids or []
+        )
+        
+        # Prepare enhanced metadata
+        metadata = {
+            "model_used": rag_response.get("model_used"),
+            "usage": rag_response.get("usage"),
+            "rag_approach": "iterative",
+            "iterations_used": rag_response.get("iterations_used"),
+            "search_stats": {
+                "total_chunks": rag_response.get("total_chunks_found"),
+                "documents_searched": len(request.document_ids or []),
+                "iterations_used": rag_response.get("iterations_used"),
+                "search_time": rag_response.get("search_time"),
+                "cache_hits": rag_response.get("cache_hits", 0),
+                "query_complexity": rag_response.get("query_complexity"),
+                "efficiency_score": rag_response.get("efficiency_score")
+            }
+        }
+        
+        return ChatResponse(
+            response=rag_response["content"],
+            message=rag_response["content"],  # Legacy compatibility
+            session_id=session_id,
+            sources=rag_response.get("sources", []),
+            metadata=metadata,
+            model_used=rag_response.get("model_used"),
+            usage=rag_response.get("usage"),
+            rag_approach="iterative",
+            iterations_used=rag_response.get("iterations_used"),
+            total_chunks_found=rag_response.get("total_chunks_found")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Iterative RAG error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process iterative RAG query: {str(e)}"
         )
 
 
@@ -339,4 +602,102 @@ async def analyze_query(request: QueryAnalysisRequest):
             "traditional_rag": "Best for exact definitions, direct quotes, specific clauses",
             "iterative_rag": "Best for conceptual questions, entity analysis, complex topics"
         }
-    } 
+    }
+
+
+@router.get("/cache-stats")
+async def get_cache_stats():
+    """Get search cache performance statistics."""
+    
+    try:
+        cache = get_search_cache()
+        stats = cache.get_stats()
+        top_queries = cache.get_top_queries(10)
+        
+        return {
+            "cache_stats": {
+                "total_queries": stats.total_queries,
+                "cache_hits": stats.cache_hits,
+                "cache_misses": stats.cache_misses,
+                "similar_hits": stats.similar_hits,
+                "hit_rate": stats.hit_rate,
+                "total_entries": stats.total_entries,
+                "cache_size_mb": stats.cache_size_mb,
+                "avg_results_per_query": stats.avg_results_per_query
+            },
+            "top_queries": [
+                {"query": q, "hits": h, "last_accessed": t}
+                for q, h, t in top_queries
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cache statistics")
+
+
+@router.post("/cache/clear")
+async def clear_cache():
+    """Clear the search cache."""
+    
+    try:
+        cache = get_search_cache()
+        cache.clear()
+        
+        return {"message": "Cache cleared successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear cache")
+
+
+@router.post("/cache/optimize")
+async def optimize_cache():
+    """Optimize the search cache by removing low-value entries."""
+    
+    try:
+        cache = get_search_cache()
+        cache.optimize()
+        
+        return {"message": "Cache optimized successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error optimizing cache: {e}")
+        raise HTTPException(status_code=500, detail="Failed to optimize cache")
+
+
+@router.post("/query-complexity")
+async def analyze_query_complexity(request: QueryAnalysisRequest):
+    """Analyze query complexity and provide detailed resource estimates."""
+    
+    try:
+        limits_manager = create_adaptive_limits_manager()
+        complexity = limits_manager.analyze_query_complexity(request.query)
+        initial_limits = limits_manager.get_initial_limits(request.query)
+        
+        # Estimate resource cost
+        from app.core.chat.adaptive_limits import estimate_resource_cost
+        resource_estimate = estimate_resource_cost(initial_limits, initial_limits.max_iterations)
+        
+        return {
+            "query": request.query,
+            "complexity": complexity.value,
+            "adaptive_limits": {
+                "max_iterations": initial_limits.max_iterations,
+                "max_chunks_per_iteration": initial_limits.max_chunks_per_iteration,
+                "min_confidence_threshold": initial_limits.min_confidence_threshold,
+                "similarity_threshold": initial_limits.similarity_threshold,
+                "early_stop_threshold": initial_limits.early_stop_threshold
+            },
+            "resource_estimate": resource_estimate,
+            "recommendations": {
+                "approach": "iterative" if complexity.value in ["complex", "very_complex"] else "traditional",
+                "confidence": 0.9 if complexity.value == "very_complex" else 
+                           0.7 if complexity.value == "complex" else
+                           0.6 if complexity.value == "moderate" else 0.8
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing query complexity: {e}")
+        raise HTTPException(status_code=500, detail="Query complexity analysis failed") 

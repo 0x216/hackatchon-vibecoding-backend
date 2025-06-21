@@ -363,6 +363,9 @@
                 >
                   <i class="fas fa-list-ul"></i> Key Obligations
                 </button>
+                <button class="quick-btn" id="prolongDurationBtn">
+                  <i class="fas fa-calendar-plus"></i> Prolong Duration
+                </button>
               </div>
 
               <div class="chat-input">
@@ -391,6 +394,38 @@
 
       <!-- Toast Notifications -->
       <div class="toast-container" id="toastContainer"></div>
+
+      <!-- Prolong Duration Modal -->
+      <div class="modal" id="prolongDurationModal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Prolong Contract Duration</h3>
+            <button class="modal-close" id="prolongDurationModalClose">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p>Select the new due date for the contract:</p>
+            <div class="date-input-container">
+              <label for="prolongDatePicker">New Due Date:</label>
+              <input
+                type="date"
+                id="prolongDatePicker"
+                class="date-picker"
+                min=""
+              />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="prolongCancelBtn">
+              Cancel
+            </button>
+            <button class="btn btn-primary" id="prolongConfirmBtn" disabled>
+              Confirm
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>

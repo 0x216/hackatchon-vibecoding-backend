@@ -100,6 +100,16 @@ class LegalRAGApp {
     this.loadingText = document.getElementById("loadingText");
     this.status = document.getElementById("status");
     this.toastContainer = document.getElementById("toastContainer");
+
+    // Prolong duration modal elements
+    this.prolongDurationBtn = document.getElementById("prolongDurationBtn");
+    this.prolongDurationModal = document.getElementById("prolongDurationModal");
+    this.prolongDurationModalClose = document.getElementById(
+      "prolongDurationModalClose"
+    );
+    this.prolongDatePicker = document.getElementById("prolongDatePicker");
+    this.prolongCancelBtn = document.getElementById("prolongCancelBtn");
+    this.prolongConfirmBtn = document.getElementById("prolongConfirmBtn");
   }
 
   attachEventListeners() {
@@ -217,10 +227,44 @@ class LegalRAGApp {
     // Quick questions
     document.querySelectorAll(".quick-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
+        // Special handling for prolong duration button
+        if (e.currentTarget.id === "prolongDurationBtn") {
+          this.showProlongDurationModal();
+          return;
+        }
+
         const question = e.currentTarget.dataset.question;
-        this.messageInput.value = question;
-        this.sendMessage();
+        if (question) {
+          this.messageInput.value = question;
+          this.sendMessage();
+        }
       });
+    });
+
+    // Prolong duration modal event listeners
+    this.prolongDurationBtn.addEventListener("click", () =>
+      this.showProlongDurationModal()
+    );
+    this.prolongDurationModalClose.addEventListener("click", () =>
+      this.hideProlongDurationModal()
+    );
+    this.prolongCancelBtn.addEventListener("click", () =>
+      this.hideProlongDurationModal()
+    );
+    this.prolongConfirmBtn.addEventListener("click", () =>
+      this.confirmProlongDuration()
+    );
+
+    // Date picker change event
+    this.prolongDatePicker.addEventListener("change", (e) => {
+      this.prolongConfirmBtn.disabled = !e.target.value;
+    });
+
+    // Close modal when clicking outside
+    this.prolongDurationModal.addEventListener("click", (e) => {
+      if (e.target === this.prolongDurationModal) {
+        this.hideProlongDurationModal();
+      }
     });
   }
 
@@ -1596,6 +1640,59 @@ class LegalRAGApp {
     return (
       stageNames[stageName] ||
       stageName.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
+    );
+  }
+
+  showProlongDurationModal() {
+    // Set minimum date to today
+    const today = new Date().toISOString().split("T")[0];
+    this.prolongDatePicker.min = today;
+    this.prolongDatePicker.value = "";
+    this.prolongConfirmBtn.disabled = true;
+
+    // Show modal (use flex to maintain centering)
+    this.prolongDurationModal.style.display = "flex";
+
+    // Focus on date picker
+    setTimeout(() => {
+      this.prolongDatePicker.focus();
+    }, 100);
+  }
+
+  hideProlongDurationModal() {
+    this.prolongDurationModal.style.display = "none";
+    this.prolongDatePicker.value = "";
+    this.prolongConfirmBtn.disabled = true;
+  }
+
+  confirmProlongDuration() {
+    const selectedDate = this.prolongDatePicker.value;
+    if (!selectedDate) {
+      this.showToast("Please select a date", "error");
+      return;
+    }
+
+    // Format the date for the LLM query
+    const dateObj = new Date(selectedDate);
+    const formattedDate = dateObj.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
+    // Build the question using the specified format
+    const question = `Create a new amendment to this document. Only return the amendment, do not include any other text. This new amendment should contain the due date of this contract prolonged to this date: ${formattedDate}`;
+
+    // Hide modal
+    this.hideProlongDurationModal();
+
+    // Set the question and send it
+    this.messageInput.value = question;
+    this.sendMessage();
+
+    this.showToast(
+      `Contract prolongation requested until ${formattedDate}`,
+      "info"
     );
   }
 

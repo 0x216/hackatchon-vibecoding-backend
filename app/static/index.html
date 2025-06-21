@@ -356,15 +356,18 @@
                 </button>
                 <button
                   class="quick-btn"
-                  data-question="Compare termination conditions across documents"
+                  data-question="Compare the documents and mention all changes between them. If there are none, mention that."
                 >
-                  <i class="fas fa-balance-scale"></i> Compare Terms
+                  <i class="fas fa-balance-scale"></i> Compare documents
                 </button>
                 <button
                   class="quick-btn"
                   data-question="Summarize key obligations from all documents"
                 >
                   <i class="fas fa-list-ul"></i> Key Obligations
+                </button>
+                <button class="quick-btn" id="findClientBtn">
+                  <i class="fas fa-user-tie"></i> Find related to Client
                 </button>
                 <button
                   class="quick-btn"
@@ -432,6 +435,38 @@
             </button>
             <button class="btn btn-primary" id="prolongConfirmBtn" disabled>
               Confirm
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Find Client Modal -->
+      <div class="modal" id="findClientModal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Find Documents by Client</h3>
+            <button class="modal-close" id="findClientModalClose">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p>Enter the client name to search for related documents:</p>
+            <div class="client-input-container">
+              <label for="clientNameInput">Client Name:</label>
+              <input
+                type="text"
+                id="clientNameInput"
+                class="client-name-input"
+                placeholder="Enter client name..."
+              />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="clientSearchCancelBtn">
+              Cancel
+            </button>
+            <button class="btn btn-primary" id="clientSearchBtn" disabled>
+              Search
             </button>
           </div>
         </div>

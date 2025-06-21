@@ -98,7 +98,13 @@ body {
 }
 
 .panel-header {
-  background: linear-gradient(90deg, #4299e1 0%, #3182ce 100%);
+  background: #10a3de;
+  background: linear-gradient(
+    90deg,
+    rgba(16, 163, 222, 1) 0%,
+    rgba(87, 169, 199, 1) 50%,
+    rgba(21, 42, 102, 1) 100%
+  );
   color: white;
   padding: 1.5rem;
   display: flex;
@@ -773,6 +779,40 @@ input:checked + .toggle-slider:before {
   outline: none;
   border-color: #4299e1;
   box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+}
+
+/* Client input styles - matching date input styles */
+.client-input-container {
+  margin: 1.5rem 0;
+  text-align: left;
+}
+
+.client-input-container label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: #2d3748;
+}
+
+.client-name-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 1rem;
+  background: white;
+  color: #2d3748;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.client-name-input:focus {
+  outline: none;
+  border-color: #4299e1;
+  box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+}
+
+.client-name-input::placeholder {
+  color: #a0aec0;
 }
 
 /* Documents Section */

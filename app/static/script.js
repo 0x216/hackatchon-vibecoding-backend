@@ -110,6 +110,16 @@ class LegalRAGApp {
     this.prolongDatePicker = document.getElementById("prolongDatePicker");
     this.prolongCancelBtn = document.getElementById("prolongCancelBtn");
     this.prolongConfirmBtn = document.getElementById("prolongConfirmBtn");
+
+    // Find client modal elements
+    this.findClientBtn = document.getElementById("findClientBtn");
+    this.findClientModal = document.getElementById("findClientModal");
+    this.findClientModalClose = document.getElementById("findClientModalClose");
+    this.clientNameInput = document.getElementById("clientNameInput");
+    this.clientSearchCancelBtn = document.getElementById(
+      "clientSearchCancelBtn"
+    );
+    this.clientSearchBtn = document.getElementById("clientSearchBtn");
   }
 
   attachEventListeners() {
@@ -233,6 +243,12 @@ class LegalRAGApp {
           return;
         }
 
+        // Special handling for find client button
+        if (e.currentTarget.id === "findClientBtn") {
+          this.showFindClientModal();
+          return;
+        }
+
         const question = e.currentTarget.dataset.question;
         if (question) {
           // Extract button text (remove icon and trim)
@@ -278,6 +294,36 @@ class LegalRAGApp {
     this.prolongDurationModal.addEventListener("click", (e) => {
       if (e.target === this.prolongDurationModal) {
         this.hideProlongDurationModal();
+      }
+    });
+
+    // Find client modal event listeners
+    this.findClientModalClose.addEventListener("click", () =>
+      this.hideFindClientModal()
+    );
+    this.clientSearchCancelBtn.addEventListener("click", () =>
+      this.hideFindClientModal()
+    );
+    this.clientSearchBtn.addEventListener("click", () =>
+      this.searchForClient()
+    );
+
+    // Client name input change event
+    this.clientNameInput.addEventListener("input", (e) => {
+      this.clientSearchBtn.disabled = !e.target.value.trim();
+    });
+
+    // Close modal when clicking outside
+    this.findClientModal.addEventListener("click", (e) => {
+      if (e.target === this.findClientModal) {
+        this.hideFindClientModal();
+      }
+    });
+
+    // Enter key support for client search
+    this.clientNameInput.addEventListener("keypress", (e) => {
+      if (e.key === "Enter" && !this.clientSearchBtn.disabled) {
+        this.searchForClient();
       }
     });
   }
@@ -1682,6 +1728,49 @@ class LegalRAGApp {
     this.prolongDurationModal.style.display = "none";
     this.prolongDatePicker.value = "";
     this.prolongConfirmBtn.disabled = true;
+  }
+
+  showFindClientModal() {
+    // Clear input and disable search button
+    this.clientNameInput.value = "";
+    this.clientSearchBtn.disabled = true;
+
+    // Show modal (use flex to maintain centering)
+    this.findClientModal.style.display = "flex";
+
+    // Focus on client name input
+    setTimeout(() => {
+      this.clientNameInput.focus();
+    }, 100);
+  }
+
+  hideFindClientModal() {
+    this.findClientModal.style.display = "none";
+    this.clientNameInput.value = "";
+    this.clientSearchBtn.disabled = true;
+  }
+
+  searchForClient() {
+    const clientName = this.clientNameInput.value.trim();
+    if (!clientName) {
+      this.showToast("Please enter a client name", "error");
+      return;
+    }
+
+    // Build the question using the specified format
+    const question = `Find and return all the documents for ${clientName}. Only return the document names and titles, nothing else.`;
+    const displayMessage = `Find related to Client: ${clientName}`;
+
+    // Hide modal
+    this.hideFindClientModal();
+
+    // Send message to LLM
+    this.sendMessage(question, displayMessage);
+
+    this.showToast(
+      `Searching for documents related to ${clientName}...`,
+      "info"
+    );
   }
 
   confirmProlongDuration() {

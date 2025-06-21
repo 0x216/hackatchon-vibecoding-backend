@@ -11,6 +11,7 @@ from app.core.chat.enhanced_citations import create_enhanced_citations, format_c
 from app.core.chat.search_cache import get_search_cache, cached_search
 from app.core.chat.response_validator import response_validator
 from app.core.chat.token_config import token_config_manager
+from app.core.chat.vertex_ai_helper import vertex_ai_helper
 from app.db.connection import async_session
 from app.db.models import ChatSession, ChatMessage as DBChatMessage
 
@@ -233,10 +234,27 @@ Provide a clear, detailed answer based on the available information."""
                 max_tokens=500
             )
 
+            # Special handling for Vertex AI empty responses
+            if (not response or not response.content) and hasattr(self.llm_client, 'primary_client'):
+                logger.warning("Primary LLM returned empty response for query rewriting, trying simpler prompt")
+
+                # Try with a much simpler prompt
+                simple_prompt = f"Convert this question into 2-3 search queries: {query}"
+                response = await self.llm_client.chat_completion(
+                    [ChatMessage(role="user", content=simple_prompt)],
+                    temperature=0.5,
+                    max_tokens=300
+                )
+
             # Validate response content
             if not response or not response.content:
-                logger.warning("Empty response from LLM for query rewriting")
-                return [query]
+                logger.warning(f"Empty response from LLM for query rewriting. "
+                             f"Finish reason: {response.finish_reason if response else 'No response'}")
+
+                # Use Vertex AI helper to create fallback queries
+                fallback_queries = vertex_ai_helper.create_fallback_queries(query)
+                logger.info(f"Using fallback queries: {fallback_queries}")
+                return fallback_queries
 
             # Parse JSON response with improved error handling
             content = response.content.strip()
@@ -275,15 +293,17 @@ Provide a clear, detailed answer based on the available information."""
                 search_queries = json.loads(json_content)
             except json.JSONDecodeError as json_err:
                 logger.error(f"JSON decode error: {json_err}. Content: '{json_content[:200]}...'")
-                # Try to extract queries from malformed response using regex
-                import re
-                query_pattern = r'"([^"]+)"'
-                extracted_queries = re.findall(query_pattern, json_content)
-                if extracted_queries:
-                    logger.info(f"Extracted {len(extracted_queries)} queries using regex fallback")
-                    return [q.strip() for q in extracted_queries if q.strip()]
+
+                # Use Vertex AI helper to extract queries from malformed response
+                extracted_queries = vertex_ai_helper.extract_queries_from_simple_response(json_content, query)
+                if extracted_queries and extracted_queries != [query]:
+                    logger.info(f"Extracted {len(extracted_queries)} queries using Vertex AI helper")
+                    return extracted_queries
                 else:
-                    return [query]
+                    # Final fallback
+                    fallback_queries = vertex_ai_helper.create_fallback_queries(query)
+                    logger.info(f"Using fallback queries: {fallback_queries}")
+                    return fallback_queries
 
             # Ensure we have a list of strings
             if isinstance(search_queries, list):
@@ -454,7 +474,34 @@ Provide a clear, detailed answer based on the available information."""
 
             # Validate response content
             if not response or not response.content:
-                logger.warning("Empty response from LLM for assessment")
+                logger.warning(f"Empty response from LLM for assessment. "
+                             f"Finish reason: {response.finish_reason if response else 'No response'}")
+
+                # Try with a simpler assessment prompt if using resilient client
+                if hasattr(self.llm_client, 'primary_client'):
+                    logger.info("Trying simpler assessment prompt")
+                    simple_prompt = f"Is this information sufficient to answer '{query}'? Answer yes or no and explain briefly."
+
+                    try:
+                        simple_response = await self.llm_client.chat_completion(
+                            [ChatMessage(role="user", content=simple_prompt)],
+                            temperature=0.1,
+                            max_tokens=200
+                        )
+
+                        if simple_response and simple_response.content:
+                            # Parse simple response
+                            content = simple_response.content.lower()
+                            sufficient = "yes" in content or "sufficient" in content
+                            return {
+                                "sufficient": sufficient,
+                                "confidence": 0.7 if sufficient else 0.3,
+                                "missing_info": "Assessment based on simplified prompt",
+                                "additional_queries": []
+                            }
+                    except Exception as e:
+                        logger.warning(f"Simple assessment also failed: {e}")
+
                 return self._get_fallback_assessment(chunks)
 
             # Parse JSON response with improved error handling

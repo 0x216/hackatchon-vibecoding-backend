@@ -9,7 +9,7 @@ from app.core.chat.enhanced_retriever import EnhancedDocumentRetriever
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/chat", tags=["Iterative Chat"])
+router = APIRouter(prefix="/api/v1/chat", tags=["Iterative Chat"])
 
 
 class IterativeChatRequest(BaseModel):

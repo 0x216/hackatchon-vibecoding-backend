@@ -53,6 +53,7 @@ class MultiStageResult:
     stage_results: List[StageResult]
     token_allocation: Optional[TokenAllocation]
     processing_metadata: Dict[str, Any]
+    total_token_usage: Optional[Dict[str, Any]] = None  # Aggregated token usage across all stages
     fallback_used: bool = False
 
 
@@ -81,7 +82,8 @@ class MultiStageRAGGenerator:
             light_model_client=self.light_model_client
         )
         self.compressor = IntelligentCompressor(self.light_model_client)
-        self.token_manager = TokenManager(model_name="gemini-pro")
+        # Use gpt-4 for token counting as it's compatible with tiktoken and has similar token patterns to Gemini
+        self.token_manager = TokenManager(model_name="gpt-4")
         self.legal_engine = LegalAnalysisEngine(self.light_model_client)
         
         # Legal memory system (if available)
@@ -96,13 +98,13 @@ class MultiStageRAGGenerator:
         """Get light model client for initial processing."""
         try:
             return LLMClientFactory.create_client(
-                "vertexai", 
-                model_name="gemini-2.5-pro-exp"
+                "vertexai",
+                model_name="gemini-2.5-pro"
             )
         except Exception:
             try:
                 return LLMClientFactory.create_client(
-                    "vertexai", 
+                    "vertexai",
                     model_name="gemini-2.5-pro"
                 )
             except Exception:
@@ -112,8 +114,8 @@ class MultiStageRAGGenerator:
         """Get pro model client for final analysis."""
         try:
             return LLMClientFactory.create_client(
-                "vertexai", 
-                model_name="gemini-1.5-pro"
+                "vertexai",
+                model_name="gemini-2.5-pro"
             )
         except Exception:
             return LLMClientFactory.get_default_client()
@@ -242,7 +244,7 @@ class MultiStageRAGGenerator:
             ))
             
             total_duration = (datetime.now() - start_time).total_seconds()
-            
+
             processing_metadata = {
                 "total_duration_seconds": total_duration,
                 "pipeline_version": "1.0",
@@ -251,13 +253,17 @@ class MultiStageRAGGenerator:
                 "documents_analyzed": len(document_ids),
                 "query_length": len(query)
             }
-            
+
+            # Aggregate token usage across all stages
+            total_token_usage = self._aggregate_token_usage(stage_results, token_allocation)
+
             return MultiStageResult(
                 final_response=final_response,
                 legal_analysis=legal_analysis,
                 stage_results=stage_results,
                 token_allocation=token_allocation,
                 processing_metadata=processing_metadata,
+                total_token_usage=total_token_usage,
                 fallback_used=False
             )
             
@@ -281,12 +287,16 @@ class MultiStageRAGGenerator:
                     query, document_ids, session_id
                 )
                 
+                # Create basic token usage for fallback
+                fallback_token_usage = self._aggregate_token_usage(stage_results, None)
+
                 return MultiStageResult(
                     final_response=fallback_response,
                     legal_analysis=None,
                     stage_results=stage_results,
                     token_allocation=None,
                     processing_metadata={"fallback_reason": str(e)},
+                    total_token_usage=fallback_token_usage,
                     fallback_used=True
                 )
             else:
@@ -403,6 +413,45 @@ Legal Implications: {'; '.join(contradiction.legal_implications)}
                 context_parts.append(f"{i}. {rec}")
 
         return "\n".join(context_parts)
+
+    def _aggregate_token_usage(
+        self,
+        stage_results: List[StageResult],
+        token_allocation: Optional[TokenAllocation]
+    ) -> Dict[str, Any]:
+        """Aggregate token usage across all stages."""
+
+        # Calculate total tokens used across all stages
+        total_stage_tokens = sum(stage.token_count for stage in stage_results if stage.token_count)
+
+        # Get token allocation summary if available
+        allocation_summary = None
+        if token_allocation:
+            allocation_summary = self.token_manager.get_token_usage_summary(token_allocation)
+
+        # Build comprehensive token usage summary
+        token_usage = {
+            "total_tokens": allocation_summary.get("total_tokens", 0) if allocation_summary else total_stage_tokens,
+            "token_limit": allocation_summary.get("token_limit", self.token_manager.budget.total_limit) if allocation_summary else self.token_manager.budget.total_limit,
+            "utilization": 0.0,
+            "stage_breakdown": {},
+            "allocation_details": allocation_summary.get("usage_by_type", {}) if allocation_summary else {}
+        }
+
+        # Calculate utilization
+        if token_usage["token_limit"] > 0:
+            token_usage["utilization"] = token_usage["total_tokens"] / token_usage["token_limit"]
+
+        # Break down token usage by stage
+        for stage in stage_results:
+            if stage.token_count and stage.token_count > 0:
+                token_usage["stage_breakdown"][stage.stage_name] = {
+                    "tokens": stage.token_count,
+                    "duration_seconds": stage.duration_seconds,
+                    "success": stage.success
+                }
+
+        return token_usage
 
     async def _generate_final_response(
         self,

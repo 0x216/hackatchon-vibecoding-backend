@@ -44,9 +44,7 @@ class TokenConfigManager:
                 min_expected_length=200,
                 description="Document summarization and overview tasks",
                 keywords=[
-                    "summarize", "summary", 
-                    "overview",  "краткое изложение", "основные моменты",
-                    "key points", "main points", "ключевые моменты", "главные пункты"
+                    "summarize", "summary", "overview", "key points", "main points"
                 ]
             ),
             QueryType.LEGAL_ANALYSIS: TokenConfig(
@@ -54,11 +52,8 @@ class TokenConfigManager:
                 min_expected_length=300,
                 description="Legal analysis and interpretation tasks",
                 keywords=[
-                    "analyze", "analysis",  
-                    "legal implications", "правовые последствия",
-                    "obligations",  "requirements", 
-                    "compliance",  "violation", 
-                    "contract",  "agreement", "соглашение"
+                    "analyze", "analysis", "legal implications", "obligations",
+                    "requirements", "compliance", "violation", "contract", "agreement"
                 ]
             ),
             QueryType.DETAILED_EXPLANATION: TokenConfig(
@@ -66,9 +61,8 @@ class TokenConfigManager:
                 min_expected_length=250,
                 description="Detailed explanations and how-to questions",
                 keywords=[
-                    "explain",  "how to",  "process", 
-                    "procedure",  "steps",  "detailed", 
-                    "comprehensive",  "thorough", "тщательный"
+                    "explain", "how to", "process", "procedure", "steps",
+                    "detailed", "comprehensive", "thorough"
                 ]
             ),
             QueryType.COMPARISON: TokenConfig(
@@ -76,9 +70,8 @@ class TokenConfigManager:
                 min_expected_length=200,
                 description="Comparison and contrast tasks",
                 keywords=[
-                    "compare",  "comparison", 
-                    "difference",  "similar", 
-                    "contrast",  "versus",  "vs"
+                    "compare", "comparison", "difference", "similar",
+                    "contrast", "versus", "vs"
                 ]
             ),
             QueryType.EXTRACTION: TokenConfig(
@@ -86,8 +79,7 @@ class TokenConfigManager:
                 min_expected_length=100,
                 description="Information extraction tasks",
                 keywords=[
-                    "extract",  "find",  "list", 
-                    "identify",  "locate",  "search", "поиск"
+                    "extract", "find", "list", "identify", "locate", "search"
                 ]
             ),
             QueryType.SIMPLE_QUESTION: TokenConfig(
@@ -95,8 +87,7 @@ class TokenConfigManager:
                 min_expected_length=50,
                 description="Simple factual questions",
                 keywords=[
-                    "what is", "что такое", "who is", "кто такой",
-                    "when",  "where",  "which", "какой"
+                    "what is", "who is", "when", "where", "which"
                 ]
             ),
             QueryType.GENERAL: TokenConfig(

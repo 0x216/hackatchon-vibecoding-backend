@@ -32,6 +32,7 @@ aiofiles==24.1.0
 httpx==0.28.1
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
+tiktoken==0.8.0
 
 # Development and testing
 pytest==8.4.1

@@ -277,7 +277,7 @@ async def chat_query(
                 'temporal_analysis': multi_stage_result.legal_analysis.temporal_analysis if multi_stage_result.legal_analysis else None,
                 'cross_document_relationships': multi_stage_result.legal_analysis.cross_document_insights if multi_stage_result.legal_analysis else None,
                 'processing_stages': [s.__dict__ for s in multi_stage_result.stage_results],
-                'token_usage': multi_stage_result.token_allocation.allocation_metadata if multi_stage_result.token_allocation else None,
+                'token_usage': multi_stage_result.total_token_usage,
                 'fallback_used': multi_stage_result.fallback_used
             }
 

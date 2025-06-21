@@ -252,45 +252,71 @@ class VertexAIClient(LLMClient):
             from vertexai.generative_models import GenerationConfig
 
             # Convert messages to Vertex AI format
-            # Vertex AI expects a conversation format
+            # Vertex AI works better with simpler prompts
             conversation_parts = []
+            system_content = ""
 
             for msg in messages:
                 if msg.role == "system":
-                    # System messages are handled as part of the first user message
-                    continue
+                    system_content = msg.content
                 elif msg.role == "user":
-                    conversation_parts.append(f"User: {msg.content}")
+                    conversation_parts.append(msg.content)
                 elif msg.role == "assistant":
                     conversation_parts.append(f"Assistant: {msg.content}")
 
-            # Add system prompt if present
-            system_messages = [msg.content for msg in messages if msg.role == "system"]
-            if system_messages:
-                system_prompt = "\n".join(system_messages)
-                prompt = f"System: {system_prompt}\n\n" + "\n".join(conversation_parts)
+            # Build the final prompt - simpler format for Vertex AI
+            if system_content and conversation_parts:
+                prompt = f"{system_content}\n\n{conversation_parts[-1]}"  # Use only the last user message
+            elif conversation_parts:
+                prompt = conversation_parts[-1]  # Just the user message
             else:
-                prompt = "\n".join(conversation_parts)
+                prompt = "Please provide a response."
 
-            # Configure generation parameters
+            # Log the prompt for debugging
+            logger.debug(f"Vertex AI prompt (first 200 chars): {prompt[:200]}...")
+
+            # Configure generation parameters with safety settings
             generation_config = GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=max_tokens,
+                top_p=0.95,  # Add top_p for better generation
+                top_k=40,    # Add top_k for more diverse responses
             )
 
-            # Generate response
+            # Import safety settings to prevent blocking
+            try:
+                from vertexai.generative_models import HarmCategory, HarmBlockThreshold
+                safety_settings = {
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            except ImportError:
+                logger.warning("Could not import Vertex AI safety settings")
+                safety_settings = None
+
+            # Generate response with safety settings
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=generation_config
+                    generation_config=generation_config,
+                    safety_settings=safety_settings if safety_settings else None
                 )
             )
 
             # Extract content from response
             if response.candidates and len(response.candidates) > 0:
                 candidate = response.candidates[0]
-                content = candidate.content.parts[0].text if candidate.content.parts else ""
+
+                # More robust content extraction
+                content = ""
+                if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                        content = candidate.content.parts[0].text if candidate.content.parts[0].text else ""
+                    elif hasattr(candidate.content, 'text'):
+                        content = candidate.content.text or ""
 
                 # Extract usage information if available
                 usage_metadata = getattr(response, 'usage_metadata', None)
@@ -311,6 +337,39 @@ class VertexAIClient(LLMClient):
                         finish_reason = finish_reason_raw.name.lower()
                     else:
                         finish_reason = str(finish_reason_raw).lower()
+
+                # Debug logging for empty responses
+                if not content or len(content.strip()) == 0:
+                    logger.warning(f"Vertex AI returned empty content. "
+                                 f"Finish reason: {finish_reason}, "
+                                 f"Candidate: {candidate}, "
+                                 f"Prompt length: {len(prompt)}")
+
+                    # Enhanced safety filter detection
+                    safety_blocked = False
+                    if hasattr(candidate, 'safety_ratings'):
+                        logger.warning(f"Safety ratings: {candidate.safety_ratings}")
+
+                        # Check if any safety rating blocked the response
+                        for rating in candidate.safety_ratings:
+                            if hasattr(rating, 'blocked') and rating.blocked:
+                                safety_blocked = True
+                                logger.warning(f"Content blocked by safety filter: {rating.category} - {rating.probability}")
+                            elif hasattr(rating, 'probability'):
+                                # Log high probability safety concerns
+                                prob_name = getattr(rating.probability, 'name', str(rating.probability))
+                                if 'HIGH' in prob_name or 'MEDIUM' in prob_name:
+                                    logger.warning(f"Safety concern detected: {rating.category} - {prob_name}")
+
+                    # Override finish_reason if safety filters detected blocking
+                    if safety_blocked:
+                        finish_reason = 'safety'
+                        logger.warning("Overriding finish_reason to 'safety' due to detected safety blocking")
+
+                    # If finish_reason suggests truncation but content is empty,
+                    # this might be a Vertex AI issue
+                    if finish_reason in ['max_tokens', 'length']:
+                        logger.error("Vertex AI reported truncation but returned empty content - possible API issue")
 
                 response_obj = LLMResponse(
                     content=content,

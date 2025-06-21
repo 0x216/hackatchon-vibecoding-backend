@@ -224,7 +224,7 @@ class LegalRAGApp {
     // Load available LLM providers
     async loadLLMProviders() {
         try {
-            const response = await fetch(`${this.apiBase}/api/chat/providers`);
+            const response = await fetch(`${this.apiBase}/api/v1/chat/providers`);
             if (response.ok) {
                 const data = await response.json();
                 this.updateLLMSelector(data.providers, data.default);
@@ -841,7 +841,7 @@ class LegalRAGApp {
 
         try {
             // Choose endpoint based on analysis mode
-            const endpoint = this.detailedAnalysisMode ? '/api/chat/query' : '/api/v1/chat/iterative';
+            const endpoint = this.detailedAnalysisMode ? '/api/v1/chat/query' : '/api/v1/chat/iterative';
 
             const requestBody = {
                 message: message,

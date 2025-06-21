@@ -533,19 +533,93 @@ input:checked + .toggle-slider:before {
   align-items: center;
   flex-wrap: wrap;
   gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(90deg, #f8f9fa 0%, #f1f5f9 100%);
+  border-bottom: 1px solid #e2e8f0;
+  transition: all 0.3s ease;
 }
 
+/* Add tooltip styles for selection help */
 .selection-info {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.85rem;
   color: #718096;
+  transition: color 0.2s ease;
+  position: relative;
+  cursor: help;
+}
+
+.selection-info i {
+  color: #4299e1;
+  font-size: 0.9rem;
+}
+
+.selection-info:hover {
+  color: #4299e1;
+}
+
+.selection-info::after {
+  content: "💡 Tip: Click any document to select/deselect it. Hold Ctrl/Cmd to select multiple documents. Hold Shift to select a range of documents. Use checkboxes for precise selection.";
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  background: #2d3748;
+  color: white;
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  width: 320px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(5px);
+  transition: all 0.3s ease;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  line-height: 1.4;
+}
+
+.selection-info:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/* Arrow for tooltip */
+.selection-info::before {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 20px;
+  border: 6px solid transparent;
+  border-top-color: #2d3748;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  z-index: 1001;
+}
+
+.selection-info:hover::before {
+  opacity: 1;
+  visibility: visible;
 }
 
 .bulk-actions {
   display: flex;
   gap: 0.5rem;
+  animation: fadeInUp 0.3s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .btn-small {
@@ -1964,4 +2038,30 @@ input:checked + .toggle-slider:before {
     align-items: flex-start;
     gap: 0.25rem;
   }
+}
+
+/* Multiple selection visual indicator */
+.document-item.multi-select-mode {
+  border-left: 2px solid #4299e1;
+}
+
+.document-item.multi-select-mode input[type="checkbox"] {
+  outline: 2px solid #4299e1;
+  outline-offset: 2px;
+}
+
+/* Selection count badge */
+.selection-count-badge {
+  background: linear-gradient(90deg, #4299e1 0%, #3182ce 100%);
+  color: white;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  animation: pulse 2s infinite;
+}
+
+.selection-count-badge.has-selection {
+  animation: none;
+  background: linear-gradient(90deg, #48bb78 0%, #38a169 100%);
 }

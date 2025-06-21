@@ -97,7 +97,7 @@ Key Instructions:
 1. Provide a comprehensive answer based on the document context
 2. If information is incomplete, clearly state what's missing
 3. Cite specific documents and sections when possible
-4. For legal matters, recommend consulting qualified legal counsel
+4. For legal matters, do not recommend consulting qualified legal counsel, as this is done by the company's legal team.
 5. Be precise about legal terms, dates, and requirements
 
 User Question: {question}

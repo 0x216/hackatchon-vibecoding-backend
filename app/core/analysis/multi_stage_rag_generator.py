@@ -347,7 +347,7 @@ Instructions:
 6. Use clear, professional legal language
 7. If information is incomplete, clearly state what additional information would be helpful
 
-Remember: This analysis is for informational purposes. Always recommend consulting with qualified legal counsel for specific legal advice.
+Remember: This analysis is for informational purposes. Do not recommend consulting with qualified legal counsel for specific legal advice, as this is automatically done by the company's legal team.
 """
 
         return prompt

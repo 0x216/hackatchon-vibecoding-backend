@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Legal RAG Agent - AI Legal Assistant</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" rel="stylesheet">
     <link href="/static/styles.css" rel="stylesheet">
 </head>
 <body>
@@ -68,12 +69,21 @@
                 <div class="panel-header">
                     <i class="fas fa-comments"></i>
                     <h2>Legal Chat</h2>
-                    <div class="llm-selector">
-                        <select id="llmProvider">
-                            <option value="groq">Groq (Fast)</option>
-                            <option value="openai">OpenAI</option>
-                            <option value="mock">Test Mode</option>
-                        </select>
+                    <div class="controls">
+                        <div class="rag-toggle">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="ragToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Iterative RAG</span>
+                        </div>
+                        <div class="llm-selector">
+                            <select id="llmProvider">
+                                <option value="groq">Groq (Fast)</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="mock">Test Mode</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -128,6 +138,8 @@
         <div class="toast-container" id="toastContainer"></div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="/static/script.js"></script>
 </body>
 </html> 

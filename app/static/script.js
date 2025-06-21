@@ -24,6 +24,7 @@ class LegalRAGApp {
         this.messageInput = document.getElementById('messageInput');
         this.sendBtn = document.getElementById('sendBtn');
         this.llmSelector = document.getElementById('llmProvider');
+        this.ragToggle = document.getElementById('ragToggle');
 
         // UI elements
         this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -394,7 +395,9 @@ class LegalRAGApp {
                     message: message,
                     session_id: this.currentSessionId,
                     llm_provider: this.llmProvider,
-                    document_ids: this.selectedDocuments ? this.selectedDocuments.map(doc => doc.id) : []
+                    document_ids: this.selectedDocuments ? this.selectedDocuments.map(doc => doc.id) : [],
+                    use_iterative_rag: this.ragToggle.checked,
+                    max_iterations: 3
                 })
             });
 
@@ -443,14 +446,54 @@ class LegalRAGApp {
 
         let metadataHtml = '';
         if (metadata && metadata.model_used) {
+            const ragInfo = metadata.rag_approach ? 
+                `<span class="rag-info ${metadata.rag_approach}">
+                    <i class="fas fa-${metadata.rag_approach === 'iterative' ? 'sync' : 'search'}"></i>
+                    ${metadata.rag_approach} RAG
+                    ${metadata.iterations_used ? ` (${metadata.iterations_used} iter)` : ''}
+                </span>` : '';
+            
             metadataHtml = `
                 <div class="message-time">
                     ${time} • ${metadata.model_used}
                     ${metadata.usage ? ` • ${metadata.usage.total_tokens} tokens` : ''}
+                    ${ragInfo}
                 </div>
             `;
         } else {
             metadataHtml = `<div class="message-time">${time}</div>`;
+        }
+
+        // Process content as markdown for bot messages
+        let processedContent = content;
+        if (type === 'bot' && !isError) {
+            try {
+                // Configure marked with syntax highlighting
+                if (typeof marked !== 'undefined') {
+                    marked.setOptions({
+                        highlight: function(code, lang) {
+                            if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                                try {
+                                    return hljs.highlight(code, { language: lang }).value;
+                                } catch (__) {}
+                            }
+                            return code;
+                        },
+                        breaks: true,
+                        gfm: true
+                    });
+                    processedContent = `<div class="markdown-content">${marked.parse(content)}</div>`;
+                } else {
+                    // Fallback: at least handle line breaks
+                    processedContent = `<div class="markdown-content">${content.replace(/\n/g, '<br>')}</div>`;
+                }
+            } catch (e) {
+                // Fallback to plain text with line breaks
+                processedContent = `<div class="markdown-content">${content.replace(/\n/g, '<br>')}</div>`;
+            }
+        } else {
+            // For user messages, just handle line breaks
+            processedContent = content.replace(/\n/g, '<br>');
         }
 
         messageDiv.innerHTML = `
@@ -458,7 +501,7 @@ class LegalRAGApp {
                 <i class="fas fa-${type === 'user' ? 'user' : 'robot'}"></i>
             </div>
             <div class="message-content ${isError ? 'error' : ''}">
-                <p>${content}</p>
+                ${type === 'bot' && !isError ? processedContent : `<p>${processedContent}</p>`}
                 ${sourcesHtml}
                 ${metadataHtml}
             </div>

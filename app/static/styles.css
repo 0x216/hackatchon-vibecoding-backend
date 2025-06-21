@@ -72,7 +72,7 @@ body {
 /* Main Layout */
 .main {
     display: grid;
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: 1fr 3fr;
     gap: 2rem;
     padding: 2rem;
     flex: 1;
@@ -106,12 +106,77 @@ body {
     font-size: 1.4rem;
 }
 
-/* LLM Selector */
-.llm-selector {
+/* Controls */
+.controls {
     position: absolute;
     right: 1.5rem;
     top: 50%;
     transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+/* RAG Toggle */
+.rag-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.toggle-label {
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.3);
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+    background-color: #48bb78;
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+/* LLM Selector */
+.llm-selector {
 }
 
 .llm-selector select {
@@ -331,9 +396,30 @@ body {
 
 /* Chat Interface */
 .chat-container {
-    height: calc(100vh - 300px);
+    height: calc(100vh - 250px);
     display: flex;
     flex-direction: column;
+}
+
+/* RAG Approach Indicator */
+.rag-info {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 0.4em 0.8em;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+    margin-left: 0.5em;
+}
+
+.rag-info.iterative {
+    background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+}
+
+.rag-info.traditional {
+    background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
 }
 
 .chat-messages {
@@ -394,9 +480,153 @@ body {
     color: white;
 }
 
+.user-message .message-content .markdown-content {
+    color: white;
+}
+
+.user-message .message-content .markdown-content h1,
+.user-message .message-content .markdown-content h2,
+.user-message .message-content .markdown-content h3,
+.user-message .message-content .markdown-content h4,
+.user-message .message-content .markdown-content h5,
+.user-message .message-content .markdown-content h6 {
+    color: white;
+}
+
+.user-message .message-content .markdown-content code {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.user-message .message-content .markdown-content pre {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.user-message .message-content .markdown-content blockquote {
+    border-left: 4px solid rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.1);
+}
+
 .message-content p {
     margin-bottom: 0.5rem;
     line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Enhanced Markdown Support */
+.message-content .markdown-content {
+    line-height: 1.7;
+    color: #2d3748;
+    font-size: 15px;
+}
+
+.message-content .markdown-content h1,
+.message-content .markdown-content h2,
+.message-content .markdown-content h3,
+.message-content .markdown-content h4,
+.message-content .markdown-content h5,
+.message-content .markdown-content h6 {
+    margin: 1.2em 0 0.6em 0;
+    font-weight: 600;
+    color: #1a202c;
+}
+
+.message-content .markdown-content h1 { font-size: 1.4em; }
+.message-content .markdown-content h2 { font-size: 1.3em; }
+.message-content .markdown-content h3 { font-size: 1.2em; }
+.message-content .markdown-content h4 { font-size: 1.1em; }
+
+.message-content .markdown-content p {
+    margin: 0.8em 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.message-content .markdown-content ul,
+.message-content .markdown-content ol {
+    margin: 0.8em 0;
+    padding-left: 1.5em;
+}
+
+.message-content .markdown-content li {
+    margin: 0.4em 0;
+    line-height: 1.6;
+}
+
+.message-content .markdown-content blockquote {
+    border-left: 4px solid #4299e1;
+    background: #f7fafc;
+    margin: 1em 0;
+    padding: 0.8em 1.2em;
+    border-radius: 0 4px 4px 0;
+    font-style: italic;
+}
+
+.message-content .markdown-content code {
+    background: #f1f5f9;
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    color: #e53e3e;
+}
+
+.message-content .markdown-content pre {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 1em;
+    margin: 1em 0;
+    overflow-x: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.message-content .markdown-content pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+}
+
+.message-content .markdown-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 0.9em;
+}
+
+.message-content .markdown-content th,
+.message-content .markdown-content td {
+    border: 1px solid #e2e8f0;
+    padding: 0.6em 0.8em;
+    text-align: left;
+}
+
+.message-content .markdown-content th {
+    background: #f7fafc;
+    font-weight: 600;
+}
+
+.message-content .markdown-content strong {
+    font-weight: 600;
+    color: #1a202c;
+}
+
+.message-content .markdown-content em {
+    font-style: italic;
+    color: #4a5568;
+}
+
+.message-content .markdown-content a {
+    color: #4299e1;
+    text-decoration: underline;
+}
+
+.message-content .markdown-content a:hover {
+    color: #3182ce;
 }
 
 .message-time {

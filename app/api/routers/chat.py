@@ -8,6 +8,8 @@ import uuid
 from app.db.connection import get_db
 from app.db.models import ChatSession, ChatMessage
 from app.core.chat.generator import RAGGenerator
+from app.core.chat.iterative_rag import IterativeRAGGenerator
+from app.core.chat.enhanced_retriever import EnhancedDocumentRetriever
 from app.core.chat.llm_client import LLMClientFactory
 
 router = APIRouter()
@@ -18,6 +20,8 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     llm_provider: Optional[str] = "groq"
     document_ids: Optional[List[str]] = []
+    use_iterative_rag: bool = True
+    max_iterations: int = 3
 
 
 class ChatResponse(BaseModel):
@@ -26,6 +30,9 @@ class ChatResponse(BaseModel):
     sources: List[dict] = []
     model_used: Optional[str] = None
     usage: Optional[dict] = None
+    rag_approach: str = "traditional"
+    iterations_used: Optional[int] = None
+    total_chunks_found: Optional[int] = None
 
 
 @router.post("/query", response_model=ChatResponse)
@@ -75,24 +82,41 @@ async def chat_query(
             elif row.message_type == "assistant" and conversation_history:
                 conversation_history[-1]["assistant_message"] = row.content
         
-        # Initialize RAG generator with specified LLM provider
+        # Initialize LLM client
         llm_client = LLMClientFactory.create_client(request.llm_provider or "groq")
-        rag_generator = RAGGenerator(llm_client=llm_client)
         
-        # Generate RAG response
-        rag_response = await rag_generator.generate_response(
-            query=request.message,
-            session_id=session_id,
-            conversation_history=conversation_history,
-            document_ids=request.document_ids
-        )
+        # Choose RAG approach based on request
+        if request.use_iterative_rag:
+            # Use Iterative RAG for complex queries
+            retriever = EnhancedDocumentRetriever()
+            rag_generator = IterativeRAGGenerator(llm_client=llm_client, retriever=retriever)
+            
+            rag_response = await rag_generator.generate_response(
+                query=request.message,
+                session_id=session_id,
+                max_iterations=request.max_iterations,
+                document_ids=request.document_ids or []
+            )
+        else:
+            # Use Traditional RAG for simple queries
+            rag_generator = RAGGenerator(llm_client=llm_client)
+            
+            rag_response = await rag_generator.generate_response(
+                query=request.message,
+                session_id=session_id,
+                conversation_history=conversation_history,
+                document_ids=request.document_ids or []
+            )
         
         return ChatResponse(
             message=rag_response["content"],
             session_id=session_id,
             sources=rag_response.get("sources", []),
             model_used=rag_response.get("model_used"),
-            usage=rag_response.get("usage")
+            usage=rag_response.get("usage"),
+            rag_approach="iterative" if request.use_iterative_rag else "traditional",
+            iterations_used=rag_response.get("iterations_used"),
+            total_chunks_found=rag_response.get("total_chunks_found")
         )
         
     except HTTPException:
@@ -259,4 +283,60 @@ async def test_llm_connection(llm_provider: str = "groq"):
             "status": "error",
             "provider": llm_provider,
             "error": str(e)
-        } 
+        }
+
+
+class QueryAnalysisRequest(BaseModel):
+    query: str
+
+
+@router.post("/analyze-query")
+async def analyze_query(request: QueryAnalysisRequest):
+    """Analyze query and recommend RAG approach."""
+    
+    def classify_query_type(query: str) -> str:
+        """Classify the type of query."""
+        query_lower = query.lower()
+        
+        if any(word in query_lower for word in ["what is", "define", "definition", "meaning"]):
+            return "definition"
+        elif any(word in query_lower for word in ["who are", "parties", "stakeholders"]):
+            return "entity_identification"
+        elif any(word in query_lower for word in ["obligations", "requirements", "must", "shall"]):
+            return "obligation_inquiry"
+        elif any(word in query_lower for word in ["rights", "permissions", "allowed", "can"]):
+            return "rights_inquiry"
+        elif any(word in query_lower for word in ["subject", "topic", "about", "main", "key"]):
+            return "conceptual_overview"
+        else:
+            return "general"
+    
+    def needs_iterative_approach(query: str) -> bool:
+        """Determine if query needs iterative approach."""
+        query_type = classify_query_type(query)
+        return query_type in ["conceptual_overview", "general", "entity_identification"]
+    
+    def estimate_iterations(query: str) -> int:
+        """Estimate how many iterations might be needed."""
+        query_type = classify_query_type(query)
+        
+        if query_type in ["conceptual_overview", "general"]:
+            return 3
+        elif query_type in ["entity_identification", "obligation_inquiry"]:
+            return 2
+        else:
+            return 1
+    
+    query_type = classify_query_type(request.query)
+    recommended_approach = "iterative" if needs_iterative_approach(request.query) else "traditional"
+    
+    return {
+        "query": request.query,
+        "query_type": query_type,
+        "recommended_approach": recommended_approach,
+        "estimated_iterations": estimate_iterations(request.query),
+        "reasoning": {
+            "traditional_rag": "Best for exact definitions, direct quotes, specific clauses",
+            "iterative_rag": "Best for conceptual questions, entity analysis, complex topics"
+        }
+    } 

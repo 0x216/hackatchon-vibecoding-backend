@@ -244,29 +244,3 @@ class LLMClientFactory:
             logger.warning("No LLM API key configured. Using mock client.")
             return MockLLMClient()
 
-
-# Test function for the Groq client
-async def test_groq_client():
-    """Test function for Groq client."""
-    
-    # Use the provided API key
-    api_key = "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"
-    client = GroqClient(api_key=api_key)
-    
-    messages = [
-        ChatMessage(role="user", content="Explain the importance of fast language models")
-    ]
-    
-    try:
-        response = await client.chat_completion(messages)
-        print(f"Response: {response.content}")
-        print(f"Usage: {response.usage}")
-        return response
-    except Exception as e:
-        print(f"Error testing Groq client: {e}")
-        return None
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(test_groq_client()) 

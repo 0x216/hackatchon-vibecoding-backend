@@ -153,9 +153,11 @@ class EnhancedDocumentRetriever:
         intent = {
             'type': 'general',
             'focus': [],
-            'question_words': []
+            'question_words': [],
+            'numbered_items': [],
+            'technical_frameworks': []
         }
-        
+
         # Question type detection
         if any(phrase in query for phrase in ['what are', 'what is', 'define']):
             intent['type'] = 'definition'
@@ -169,19 +171,52 @@ class EnhancedDocumentRetriever:
             intent['type'] = 'consequence'
         elif any(phrase in query for phrase in ['requirements', 'must', 'shall']):
             intent['type'] = 'obligation'
-        
-        # Extract focus areas
-        legal_focuses = [
-            'patent', 'copyright', 'license', 'agreement', 'contract', 
+
+        # Detect numbered items (stages, steps, phases)
+        import re
+        numbered_patterns = [
+            r'(\d+)(?:st|nd|rd|th)?\s+(stage|step|phase|level|tier)',
+            r'(stage|step|phase|level|tier)\s+(\d+)',
+            r'(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(stage|step|phase)',
+            r'(stage|step|phase)\s+(one|two|three|four|five|six|seven|eight|nine|ten)'
+        ]
+
+        for pattern in numbered_patterns:
+            matches = re.findall(pattern, query, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    intent['numbered_items'].extend([item.lower() for item in match if item])
+                else:
+                    intent['numbered_items'].append(match.lower())
+
+        # Detect technical frameworks
+        technical_frameworks = [
+            'cyber kill chain', 'kill chain', 'mitre att&ck', 'nist framework',
+            'iso 27001', 'owasp', 'sans', 'cis controls', 'pci dss'
+        ]
+
+        for framework in technical_frameworks:
+            if framework in query:
+                intent['technical_frameworks'].append(framework)
+
+        # Extract focus areas (expanded for technical content)
+        all_focuses = [
+            # Legal terms
+            'patent', 'copyright', 'license', 'agreement', 'contract',
             'modification', 'distribution', 'sublicense', 'warranty',
             'indemnity', 'compliance', 'termination', 'export', 'commercial',
-            'government', 'agency', 'contributor', 'recipient', 'software'
+            'government', 'agency', 'contributor', 'recipient', 'software',
+            # Technical/Security terms
+            'reconnaissance', 'weaponization', 'delivery', 'exploitation',
+            'installation', 'command', 'control', 'actions', 'objectives',
+            'malware', 'payload', 'vulnerability', 'attack', 'intrusion',
+            'cybersecurity', 'security', 'threat', 'adversary', 'target'
         ]
-        
-        for focus in legal_focuses:
+
+        for focus in all_focuses:
             if focus in query:
                 intent['focus'].append(focus)
-        
+
         return intent
     
     def _extract_meaningful_terms(self, query: str) -> List[str]:
@@ -201,19 +236,45 @@ class EnhancedDocumentRetriever:
     def _extract_important_phrases(self, query: str) -> List[str]:
         """Extract important compound phrases."""
         phrases = []
-        
-        # Important compound terms
+
+        # Important compound terms (legal and technical)
         compound_patterns = [
+            # Legal terms
             'subject software', 'source code', 'government agency',
             'patent rights', 'copyright notice', 'open source',
             'user registration', 'commercial advantage', 'export license',
-            'governing law', 'intellectual property', 'non-commercial use'
+            'governing law', 'intellectual property', 'non-commercial use',
+            # Technical/Security terms
+            'cyber kill chain', 'kill chain', 'command and control',
+            'command & control', 'actions on objectives', 'lateral movement',
+            'privilege escalation', 'data exfiltration', 'persistence mechanism',
+            'initial access', 'execution phase', 'defense evasion',
+            'credential access', 'discovery phase', 'collection phase',
+            'impact phase', 'threat actor', 'attack vector', 'attack surface'
         ]
-        
+
         for pattern in compound_patterns:
-            if pattern in query:
+            if pattern in query.lower():
                 phrases.append(pattern)
-        
+
+        # Extract numbered stage/step phrases
+        import re
+        numbered_phrase_patterns = [
+            r'(\d+)(?:st|nd|rd|th)?\s+stage\s+(?:of\s+)?(?:the\s+)?(\w+(?:\s+\w+)*)',
+            r'stage\s+(\d+)\s+(?:of\s+)?(?:the\s+)?(\w+(?:\s+\w+)*)',
+            r'(\w+(?:\s+\w+)*)\s+stage\s+(\d+)',
+            r'(\w+(?:\s+\w+)*)\s+(\d+)(?:st|nd|rd|th)?\s+stage'
+        ]
+
+        for pattern in numbered_phrase_patterns:
+            matches = re.findall(pattern, query.lower())
+            for match in matches:
+                if isinstance(match, tuple):
+                    # Reconstruct meaningful phrases from matches
+                    phrase_parts = [part.strip() for part in match if part.strip()]
+                    if len(phrase_parts) >= 2:
+                        phrases.append(' '.join(phrase_parts))
+
         return phrases
     
     def _generate_search_variations(self, key_terms: List[str]) -> Dict[str, List[str]]:
@@ -221,15 +282,62 @@ class EnhancedDocumentRetriever:
         variations = {
             'exact': key_terms,
             'synonyms': [],
-            'related': []
+            'related': [],
+            'numbered_alternatives': []
         }
-        
+
         for term in key_terms:
             term_lower = term.lower()
+
+            # Add synonyms from predefined dictionary
             if term_lower in self.concept_synonyms:
                 variations['synonyms'].extend(self.concept_synonyms[term_lower])
-        
+
+            # Generate numbered alternatives for ordinal numbers
+            numbered_alternatives = self._generate_numbered_alternatives(term_lower)
+            variations['numbered_alternatives'].extend(numbered_alternatives)
+
         return variations
+
+    def _generate_numbered_alternatives(self, term: str) -> List[str]:
+        """Generate alternative representations for numbered items."""
+        alternatives = []
+
+        # Ordinal to cardinal mappings
+        ordinal_to_cardinal = {
+            'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5',
+            'sixth': '6', 'seventh': '7', 'eighth': '8', 'ninth': '9', 'tenth': '10',
+            '1st': '1', '2nd': '2', '3rd': '3', '4th': '4', '5th': '5',
+            '6th': '6', '7th': '7', '8th': '8', '9th': '9', '10th': '10'
+        }
+
+        cardinal_to_ordinal = {v: k for k, v in ordinal_to_cardinal.items()}
+
+        # Check if term contains ordinal numbers
+        for ordinal, cardinal in ordinal_to_cardinal.items():
+            if ordinal in term:
+                # Generate alternative with cardinal number
+                alternatives.append(term.replace(ordinal, cardinal))
+                # Generate alternative with different ordinal format
+                if ordinal.endswith(('st', 'nd', 'rd', 'th')):
+                    word_form = {
+                        '1st': 'first', '2nd': 'second', '3rd': 'third', '4th': 'fourth', '5th': 'fifth',
+                        '6th': 'sixth', '7th': 'seventh', '8th': 'eighth', '9th': 'ninth', '10th': 'tenth'
+                    }.get(ordinal)
+                    if word_form:
+                        alternatives.append(term.replace(ordinal, word_form))
+
+        # Check if term contains cardinal numbers
+        for cardinal, ordinal in cardinal_to_ordinal.items():
+            if cardinal in term and not any(char.isalpha() for char in term.replace(cardinal, '')):
+                # Generate alternatives with ordinal forms
+                alternatives.append(term.replace(cardinal, ordinal))
+                alternatives.append(term.replace(cardinal, cardinal + 'st' if cardinal == '1' else
+                                                cardinal + 'nd' if cardinal == '2' else
+                                                cardinal + 'rd' if cardinal == '3' else
+                                                cardinal + 'th'))
+
+        return alternatives
     
     def _build_search_patterns(self, query_analysis: Dict[str, Any]) -> Dict[str, List[str]]:
         """Build search patterns based on query analysis."""
@@ -239,26 +347,40 @@ class EnhancedDocumentRetriever:
             'medium_priority': [],
             'low_priority': []
         }
-        
-        # High priority: key terms related to intent focus
+
+        # High priority: key terms related to intent focus and technical frameworks
         intent_focus = query_analysis['intent']['focus']
+        technical_frameworks = query_analysis['intent'].get('technical_frameworks', [])
+        numbered_items = query_analysis['intent'].get('numbered_items', [])
+
         for term in query_analysis['key_terms']:
-            if term.lower() in intent_focus:
+            if (term.lower() in intent_focus or
+                any(framework in term.lower() for framework in technical_frameworks) or
+                any(item in term.lower() for item in numbered_items)):
                 patterns['high_priority'].append(term)
-        
-        # Medium priority: remaining key terms
+
+        # Add numbered alternatives to high priority for numbered queries
+        if numbered_items:
+            patterns['high_priority'].extend(query_analysis['search_variations']['numbered_alternatives'])
+
+        # Medium priority: remaining key terms and technical framework terms
         for term in query_analysis['key_terms']:
             if term not in patterns['high_priority']:
                 patterns['medium_priority'].append(term)
-        
-        # Low priority: synonyms and variations
-        patterns['low_priority'].extend(query_analysis['search_variations']['synonyms'][:10])
-        
+
+        # Add technical framework terms to medium priority
+        for framework in technical_frameworks:
+            if framework not in patterns['high_priority']:
+                patterns['medium_priority'].append(framework)
+
         # Intent-based keywords
         intent_type = query_analysis['intent']['type']
         intent_keywords = self._get_intent_keywords(intent_type)
         patterns['medium_priority'].extend(intent_keywords)
-        
+
+        # Low priority: synonyms and variations
+        patterns['low_priority'].extend(query_analysis['search_variations']['synonyms'][:10])
+
         return patterns
     
     def _get_intent_keywords(self, intent_type: str) -> List[str]:

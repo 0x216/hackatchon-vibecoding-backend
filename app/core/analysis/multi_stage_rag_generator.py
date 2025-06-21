@@ -418,8 +418,19 @@ Legal Implications: {'; '.join(contradiction.legal_implications)}
             response = await self.pro_model_client.chat_completion(
                 messages=messages,
                 temperature=0.2,  # Low temperature for factual legal analysis
-                max_tokens=4000   # Allow for comprehensive response
+                max_tokens=6000   # Increased for comprehensive legal analysis and summaries
             )
+
+            # Enhanced validation for legal analysis responses
+            if response.finish_reason in ['length', 'max_tokens']:
+                logger.warning(f"Legal analysis response was truncated due to token limit. "
+                             f"Consider breaking down the analysis into smaller parts. "
+                             f"Current response length: {len(response.content)}")
+
+            if not response.content or len(response.content.strip()) < 100:
+                logger.warning(f"Legal analysis response appears to be too short or empty. "
+                             f"Content: '{response.content[:100]}...', "
+                             f"Finish reason: {response.finish_reason}")
 
             return response.content
 

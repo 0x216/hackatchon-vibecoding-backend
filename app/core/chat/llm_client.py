@@ -93,12 +93,24 @@ class GroqClient(LLMClient):
                 choice = data['choices'][0]
                 message = choice.get('message', {})
                 
-                return LLMResponse(
+                response_obj = LLMResponse(
                     content=message.get('content', ''),
                     usage=data.get('usage'),
                     model=data.get('model'),
                     finish_reason=choice.get('finish_reason')
                 )
+
+                # Enhanced logging for debugging truncation issues
+                logger.info(f"Groq response: finish_reason={response_obj.finish_reason}, "
+                           f"content_length={len(response_obj.content)}, "
+                           f"usage={response_obj.usage}")
+
+                # Warn if response was truncated
+                if response_obj.finish_reason == 'length':
+                    logger.warning(f"Groq response was truncated due to max_tokens limit. "
+                                 f"Content length: {len(response_obj.content)}")
+
+                return response_obj
                 
         except httpx.RequestError as e:
             logger.error(f"Request error calling Groq API: {e}")
@@ -165,12 +177,24 @@ class OpenAIClient(LLMClient):
                 choice = data['choices'][0]
                 message = choice.get('message', {})
                 
-                return LLMResponse(
+                response_obj = LLMResponse(
                     content=message.get('content', ''),
                     usage=data.get('usage'),
                     model=data.get('model'),
                     finish_reason=choice.get('finish_reason')
                 )
+
+                # Enhanced logging for debugging truncation issues
+                logger.info(f"OpenAI response: finish_reason={response_obj.finish_reason}, "
+                           f"content_length={len(response_obj.content)}, "
+                           f"usage={response_obj.usage}")
+
+                # Warn if response was truncated
+                if response_obj.finish_reason == 'length':
+                    logger.warning(f"OpenAI response was truncated due to max_tokens limit. "
+                                 f"Content length: {len(response_obj.content)}")
+
+                return response_obj
                 
         except httpx.RequestError as e:
             logger.error(f"Request error calling OpenAI API: {e}")
@@ -288,12 +312,28 @@ class VertexAIClient(LLMClient):
                     else:
                         finish_reason = str(finish_reason_raw).lower()
 
-                return LLMResponse(
+                response_obj = LLMResponse(
                     content=content,
                     usage=usage,
                     model=model or self.default_model,
                     finish_reason=finish_reason
                 )
+
+                # Enhanced logging for debugging truncation issues
+                logger.info(f"Vertex AI response: finish_reason={response_obj.finish_reason}, "
+                           f"content_length={len(response_obj.content)}, "
+                           f"usage={response_obj.usage}")
+
+                # Warn if response was truncated or incomplete
+                if response_obj.finish_reason in ['max_tokens', 'length']:
+                    logger.warning(f"Vertex AI response was truncated due to max_tokens limit. "
+                                 f"Content length: {len(response_obj.content)}")
+                elif response_obj.finish_reason == 'safety':
+                    logger.warning(f"Vertex AI response was blocked due to safety filters.")
+                elif not response_obj.content or len(response_obj.content.strip()) == 0:
+                    logger.warning(f"Vertex AI returned empty content. Finish reason: {response_obj.finish_reason}")
+
+                return response_obj
             else:
                 raise ValueError("No response candidates returned from Vertex AI")
 
@@ -354,18 +394,158 @@ class LLMClientFactory:
     
     @staticmethod
     def get_default_client() -> LLMClient:
-        """Get default LLM client based on configuration."""
+        """Get default LLM client based on configuration with fallback strategy."""
 
         # Try to determine the best available client
         provider = getattr(settings, 'llm_provider', 'groq')
 
-        if provider == 'groq' and getattr(settings, 'groq_api_key', None):
-            return GroqClient()
-        elif provider == 'openai' and getattr(settings, 'openai_api_key', None):
-            return OpenAIClient()
-        elif provider in ['vertexai', 'vertex_ai'] and getattr(settings, 'vertex_ai_project_id', None):
-            return VertexAIClient()
-        else:
-            logger.warning("No LLM API key configured. Using mock client.")
-            return MockLLMClient()
+        # Try primary provider first
+        try:
+            if provider == 'groq' and getattr(settings, 'groq_api_key', None):
+                return GroqClient()
+            elif provider == 'openai' and getattr(settings, 'openai_api_key', None):
+                return OpenAIClient()
+            elif provider in ['vertexai', 'vertex_ai'] and getattr(settings, 'vertex_ai_project_id', None):
+                return VertexAIClient()
+        except Exception as e:
+            logger.warning(f"Failed to initialize primary LLM provider '{provider}': {e}")
+
+        # Fallback strategy: try other available providers
+        fallback_providers = ['groq', 'openai', 'vertexai']
+        if provider in fallback_providers:
+            fallback_providers.remove(provider)
+
+        for fallback_provider in fallback_providers:
+            try:
+                if fallback_provider == 'groq' and getattr(settings, 'groq_api_key', None):
+                    logger.info(f"Falling back to Groq client")
+                    return GroqClient()
+                elif fallback_provider == 'openai' and getattr(settings, 'openai_api_key', None):
+                    logger.info(f"Falling back to OpenAI client")
+                    return OpenAIClient()
+                elif fallback_provider == 'vertexai' and getattr(settings, 'vertex_ai_project_id', None):
+                    logger.info(f"Falling back to Vertex AI client")
+                    return VertexAIClient()
+            except Exception as e:
+                logger.warning(f"Failed to initialize fallback provider '{fallback_provider}': {e}")
+                continue
+
+        # Final fallback to mock client
+        logger.warning("No LLM providers available. Using mock client.")
+        return MockLLMClient()
+
+    @staticmethod
+    def create_resilient_client() -> 'ResilientLLMClient':
+        """Create a resilient client with multiple fallbacks."""
+
+        # Collect all available clients
+        available_clients = []
+
+        # Try to create each client type
+        if getattr(settings, 'vertex_ai_project_id', None):
+            try:
+                available_clients.append(VertexAIClient())
+                logger.info("Added Vertex AI client to resilient setup")
+            except Exception as e:
+                logger.warning(f"Could not add Vertex AI client: {e}")
+
+        if getattr(settings, 'groq_api_key', None):
+            try:
+                available_clients.append(GroqClient())
+                logger.info("Added Groq client to resilient setup")
+            except Exception as e:
+                logger.warning(f"Could not add Groq client: {e}")
+
+        if getattr(settings, 'openai_api_key', None):
+            try:
+                available_clients.append(OpenAIClient())
+                logger.info("Added OpenAI client to resilient setup")
+            except Exception as e:
+                logger.warning(f"Could not add OpenAI client: {e}")
+
+        # Always add mock client as final fallback
+        available_clients.append(MockLLMClient())
+
+        if len(available_clients) == 1:
+            # Only mock client available
+            logger.warning("Only mock client available for resilient setup")
+            return ResilientLLMClient(available_clients[0], [])
+
+        # Use first client as primary, rest as fallbacks
+        primary = available_clients[0]
+        fallbacks = available_clients[1:]
+
+        logger.info(f"Created resilient client with {len(fallbacks)} fallbacks")
+        return ResilientLLMClient(primary, fallbacks)
+
+
+class ResilientLLMClient(LLMClient):
+    """Resilient LLM client wrapper with fallback mechanisms."""
+
+    def __init__(self, primary_client: LLMClient, fallback_clients: List[LLMClient] = None):
+        self.primary_client = primary_client
+        self.fallback_clients = fallback_clients or []
+        self.default_model = getattr(primary_client, 'default_model', 'unknown')
+
+    async def chat_completion(
+        self,
+        messages: List[ChatMessage],
+        model: str = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000
+    ) -> LLMResponse:
+        """Generate chat completion with fallback strategy."""
+
+        # Try primary client first
+        try:
+            response = await self.primary_client.chat_completion(
+                messages, model, temperature, max_tokens
+            )
+
+            # Enhanced response validation
+            if response and response.content and response.content.strip():
+                # Check if response was truncated and might need retry with higher token limit
+                if response.finish_reason in ['length', 'max_tokens'] and len(response.content) < 100:
+                    logger.warning(f"Primary client returned very short truncated response "
+                                 f"(length: {len(response.content)}), trying fallbacks")
+                else:
+                    return response
+            else:
+                logger.warning("Primary client returned empty response, trying fallbacks")
+
+        except Exception as e:
+            logger.warning(f"Primary client failed: {e}, trying fallbacks")
+
+        # Try fallback clients
+        for i, fallback_client in enumerate(self.fallback_clients):
+            try:
+                logger.info(f"Trying fallback client {i+1}/{len(self.fallback_clients)}")
+                response = await fallback_client.chat_completion(
+                    messages, model, temperature, max_tokens
+                )
+
+                # Enhanced response validation for fallbacks
+                if response and response.content and response.content.strip():
+                    # Accept fallback response even if truncated, as it's better than nothing
+                    if response.finish_reason in ['length', 'max_tokens']:
+                        logger.warning(f"Fallback client {i+1} returned truncated response "
+                                     f"(length: {len(response.content)}), but accepting it")
+                    else:
+                        logger.info(f"Fallback client {i+1} succeeded")
+                    return response
+                else:
+                    logger.warning(f"Fallback client {i+1} returned empty response")
+
+            except Exception as e:
+                logger.warning(f"Fallback client {i+1} failed: {e}")
+                continue
+
+        # Final fallback: return a structured error response
+        logger.error("All LLM clients failed, returning error response")
+        return LLMResponse(
+            content="I apologize, but I'm experiencing technical difficulties and cannot process your request at the moment. Please try again later.",
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            model=model or self.default_model,
+            finish_reason="error"
+        )
 

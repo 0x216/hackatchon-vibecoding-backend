@@ -4,6 +4,8 @@ from datetime import datetime
 
 from app.core.chat.llm_client import LLMClient, LLMClientFactory, ChatMessage, LLMResponse
 from app.core.chat.retriever import DocumentRetriever
+from app.core.chat.token_config import token_config_manager
+from app.core.chat.response_validator import response_validator
 from app.db.connection import async_session
 from app.db.models import ChatSession, ChatMessage as DBChatMessage
 
@@ -66,11 +68,23 @@ Always provide clear, professional responses that help legal professionals under
             
             # Step 4: Generate LLM response
             logger.info("Generating LLM response...")
+
+            # Use intelligent token allocation based on query type and context
+            max_tokens = token_config_manager.get_max_tokens(query, len(context))
+            logger.info(f"Using {max_tokens} max_tokens for query type")
+
             llm_response = await self.llm_client.chat_completion(
                 messages,
                 temperature=0.3,  # Lower temperature for more factual responses
-                max_tokens=1500
+                max_tokens=max_tokens
             )
+
+            # Enhanced validation using response validator
+            query_type = token_config_manager.analyze_query_type(query)
+            expected_type = "summary" if query_type.value == "summarization" else "general"
+
+            validation_result = response_validator.validate_response(llm_response, query, expected_type)
+            response_validator.log_validation_result(validation_result, query)
             
             # Step 5: Post-process and format response
             formatted_response = self._format_response(

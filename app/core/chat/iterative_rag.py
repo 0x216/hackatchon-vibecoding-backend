@@ -9,6 +9,8 @@ from app.core.chat.enhanced_retriever import EnhancedDocumentRetriever
 from app.core.chat.adaptive_limits import AdaptiveLimitsManager, create_adaptive_limits_manager
 from app.core.chat.enhanced_citations import create_enhanced_citations, format_citations_for_response, generate_bibliography
 from app.core.chat.search_cache import get_search_cache, cached_search
+from app.core.chat.response_validator import response_validator
+from app.core.chat.token_config import token_config_manager
 from app.db.connection import async_session
 from app.db.models import ChatSession, ChatMessage as DBChatMessage
 
@@ -27,22 +29,33 @@ class IterativeRAGGenerator:
     5. Response Generation - Generate final answer
     """
     
-    def __init__(self, llm_client: Optional[LLMClient] = None, retriever: Optional[EnhancedDocumentRetriever] = None):
-        self.llm_client = llm_client or LLMClientFactory.get_default_client()
+    def __init__(self, llm_client: Optional[LLMClient] = None, retriever: Optional[EnhancedDocumentRetriever] = None, use_resilient_client: bool = True):
+        if use_resilient_client and llm_client is None:
+            # Use resilient client for better fallback handling
+            self.llm_client = LLMClientFactory.create_resilient_client()
+        else:
+            self.llm_client = llm_client or LLMClientFactory.get_default_client()
         self.retriever = retriever or EnhancedDocumentRetriever()
         self.limits_manager = create_adaptive_limits_manager()
         self.search_cache = get_search_cache()
         
         # System prompts for different tasks
-        self.query_rewriter_prompt = """You are an expert at converting user questions into effective search queries for legal documents.
+        self.query_rewriter_prompt = """You are an expert at converting user questions into effective search queries for legal and technical documents.
 
 Your task: Convert the user's question into 1-3 specific search queries that will help find relevant information.
 
 Guidelines:
-1. Extract key concepts, entities, and legal terms
-2. Consider synonyms and related terms
-3. Think about what document sections would contain this information
-4. Generate queries of different specificity levels
+1. Extract key concepts, entities, legal terms, and technical terminology
+2. For numbered items (stages, steps, phases), include both the number and descriptive terms
+3. Consider synonyms, related terms, and alternative phrasings
+4. Think about what document sections would contain this information
+5. Generate queries of different specificity levels
+6. For technical frameworks, include both formal names and common abbreviations
+
+Special handling for numbered concepts:
+- If asking about "5th stage", also search for "stage 5", "step 5", "phase 5"
+- Include descriptive terms that might appear instead of numbers
+- Consider that documents might use different numbering systems
 
 User Question: {question}
 
@@ -50,7 +63,7 @@ Respond with a JSON array of search queries, ordered by priority:
 ```json
 [
   "specific search query 1",
-  "broader search query 2", 
+  "broader search query 2",
   "alternative angle query 3"
 ]
 ```"""
@@ -210,29 +223,80 @@ Provide a clear, detailed answer based on the available information."""
     
     async def _rewrite_query(self, query: str) -> List[str]:
         """Convert user question into effective search queries."""
-        
+
         try:
             prompt = self.query_rewriter_prompt.format(question=query)
-            
+
             response = await self.llm_client.chat_completion(
                 [ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
                 max_tokens=500
             )
-            
-            # Parse JSON response
+
+            # Validate response content
+            if not response or not response.content:
+                logger.warning("Empty response from LLM for query rewriting")
+                return [query]
+
+            # Parse JSON response with improved error handling
             content = response.content.strip()
+
+            # Handle empty content
+            if not content:
+                logger.warning("Empty content in LLM response for query rewriting")
+                return [query]
+
+            # Extract JSON from markdown code blocks if present
             if content.startswith("```json"):
-                content = content.split("```json")[1].split("```")[0].strip()
-            
-            search_queries = json.loads(content)
-            
+                json_parts = content.split("```json")
+                if len(json_parts) > 1:
+                    json_content = json_parts[1].split("```")[0].strip()
+                else:
+                    logger.warning("Malformed JSON markdown in LLM response")
+                    return [query]
+            elif content.startswith("```"):
+                # Handle generic code blocks
+                json_parts = content.split("```")
+                if len(json_parts) >= 3:
+                    json_content = json_parts[1].strip()
+                else:
+                    logger.warning("Malformed code block in LLM response")
+                    return [query]
+            else:
+                json_content = content
+
+            # Validate JSON content before parsing
+            if not json_content or json_content.isspace():
+                logger.warning("Empty JSON content after extraction")
+                return [query]
+
+            # Attempt to parse JSON
+            try:
+                search_queries = json.loads(json_content)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON decode error: {json_err}. Content: '{json_content[:200]}...'")
+                # Try to extract queries from malformed response using regex
+                import re
+                query_pattern = r'"([^"]+)"'
+                extracted_queries = re.findall(query_pattern, json_content)
+                if extracted_queries:
+                    logger.info(f"Extracted {len(extracted_queries)} queries using regex fallback")
+                    return [q.strip() for q in extracted_queries if q.strip()]
+                else:
+                    return [query]
+
             # Ensure we have a list of strings
             if isinstance(search_queries, list):
-                return [str(q) for q in search_queries if q.strip()]
+                valid_queries = [str(q).strip() for q in search_queries if str(q).strip()]
+                if valid_queries:
+                    return valid_queries
+                else:
+                    logger.warning("No valid queries found in parsed response")
+                    return [query]
             else:
+                logger.warning(f"Expected list but got {type(search_queries)}: {search_queries}")
                 return [query]  # Fallback to original query
-                
+
         except Exception as e:
             logger.error(f"Error rewriting query: {e}")
             return [query]  # Fallback to original query
@@ -372,57 +436,126 @@ Provide a clear, detailed answer based on the available information."""
         return all_chunks[:max_chunks]
     
     async def _assess_information_sufficiency(
-        self, 
-        query: str, 
+        self,
+        query: str,
         chunks: List[Dict]
     ) -> Dict[str, Any]:
         """Assess if retrieved information is sufficient to answer the question."""
-        
+
         try:
             context = self._build_context(chunks)
             prompt = self.assessment_prompt.format(question=query, context=context)
-            
+
             response = await self.llm_client.chat_completion(
                 [ChatMessage(role="user", content=prompt)],
                 temperature=0.2,
                 max_tokens=300
             )
-            
-            # Parse JSON response
+
+            # Validate response content
+            if not response or not response.content:
+                logger.warning("Empty response from LLM for assessment")
+                return self._get_fallback_assessment(chunks)
+
+            # Parse JSON response with improved error handling
             content = response.content.strip()
+
+            # Handle empty content
+            if not content:
+                logger.warning("Empty content in LLM response for assessment")
+                return self._get_fallback_assessment(chunks)
+
+            # Extract JSON from markdown code blocks if present
             if content.startswith("```json"):
-                content = content.split("```json")[1].split("```")[0].strip()
-            
-            assessment = json.loads(content)
-            
-            # Validate response structure
+                json_parts = content.split("```json")
+                if len(json_parts) > 1:
+                    json_content = json_parts[1].split("```")[0].strip()
+                else:
+                    logger.warning("Malformed JSON markdown in assessment response")
+                    return self._get_fallback_assessment(chunks)
+            elif content.startswith("```"):
+                # Handle generic code blocks
+                json_parts = content.split("```")
+                if len(json_parts) >= 3:
+                    json_content = json_parts[1].strip()
+                else:
+                    logger.warning("Malformed code block in assessment response")
+                    return self._get_fallback_assessment(chunks)
+            else:
+                json_content = content
+
+            # Validate JSON content before parsing
+            if not json_content or json_content.isspace():
+                logger.warning("Empty JSON content after extraction in assessment")
+                return self._get_fallback_assessment(chunks)
+
+            # Attempt to parse JSON
+            try:
+                assessment = json.loads(json_content)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON decode error in assessment: {json_err}. Content: '{json_content[:200]}...'")
+                return self._get_fallback_assessment(chunks)
+
+            # Validate response structure and provide defaults
             return {
-                "sufficient": assessment.get("sufficient", False),
-                "confidence": float(assessment.get("confidence", 0.0)),
-                "missing_info": assessment.get("missing_info", ""),
-                "additional_queries": assessment.get("additional_queries", [])
+                "sufficient": bool(assessment.get("sufficient", False)),
+                "confidence": max(0.0, min(1.0, float(assessment.get("confidence", 0.0)))),
+                "missing_info": str(assessment.get("missing_info", "")),
+                "additional_queries": [
+                    str(q).strip() for q in assessment.get("additional_queries", [])
+                    if str(q).strip()
+                ]
             }
-            
+
         except Exception as e:
             logger.error(f"Error in assessment: {e}")
-            # Conservative fallback
-            return {
-                "sufficient": len(chunks) > 0,
-                "confidence": 0.5 if chunks else 0.0,
-                "missing_info": "Could not assess information sufficiency",
-                "additional_queries": []
-            }
+            return self._get_fallback_assessment(chunks)
+
+    def _get_fallback_assessment(self, chunks: List[Dict]) -> Dict[str, Any]:
+        """Get fallback assessment when LLM assessment fails."""
+        # Conservative fallback based on chunk count and content
+        has_chunks = len(chunks) > 0
+        confidence = 0.6 if has_chunks else 0.0
+
+        # If we have chunks, assume we might have some useful information
+        sufficient = has_chunks and len(chunks) >= 2
+
+        return {
+            "sufficient": sufficient,
+            "confidence": confidence,
+            "missing_info": "Could not assess information sufficiency due to LLM error",
+            "additional_queries": []
+        }
     
     async def _generate_final_response(self, query: str, context: str) -> LLMResponse:
         """Generate the final response based on all retrieved information."""
-        
+
         prompt = self.response_prompt.format(question=query, context=context)
-        
-        return await self.llm_client.chat_completion(
+
+        # Use intelligent token allocation based on query type
+        max_tokens = token_config_manager.get_max_tokens(query, len(context))
+        logger.info(f"Using {max_tokens} max_tokens for query type")
+
+        response = await self.llm_client.chat_completion(
             [ChatMessage(role="user", content=prompt)],
             temperature=0.3,
-            max_tokens=1500
+            max_tokens=max_tokens
         )
+
+        # Enhanced validation using response validator
+        query_lower = query.lower()
+        expected_type = "summary" if any(keyword in query_lower for keyword in ['summarize', 'summary']) else "general"
+
+        validation_result = response_validator.validate_response(response, query, expected_type)
+        response_validator.log_validation_result(validation_result, query)
+
+        # Additional logging for debugging
+        if not validation_result.is_valid:
+            logger.warning(f"Response validation failed: {validation_result.issues}")
+            if validation_result.suggestions:
+                logger.info(f"Suggestions for improvement: {validation_result.suggestions}")
+
+        return response
     
     def _build_context(self, retrieval_results: List[Dict]) -> str:
         """Build context string from retrieved document chunks."""

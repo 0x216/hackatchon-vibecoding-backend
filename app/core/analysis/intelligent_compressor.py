@@ -346,11 +346,26 @@ Provide a concise but legally complete summary:"""
 
         try:
             messages = [ChatMessage(role="user", content=prompt)]
+
+            # Use higher token limit for summarization to avoid truncation
+            summary_max_tokens = max(max_tokens, 1000)  # Ensure minimum of 1000 tokens for summaries
+
             response = await self.light_model_client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=max_tokens
+                max_tokens=summary_max_tokens
             )
+
+            # Enhanced validation for summary responses
+            if response.finish_reason in ['length', 'max_tokens']:
+                logger.warning(f"Summary for section '{section.section_title}' was truncated. "
+                             f"Consider increasing max_tokens. Current length: {len(response.content)}")
+
+            if not response.content or len(response.content.strip()) < 20:
+                logger.warning(f"Summary for section '{section.section_title}' appears too short or empty. "
+                             f"Content: '{response.content[:50]}...', "
+                             f"Finish reason: {response.finish_reason}")
+
             return response.content
         except Exception as e:
             logger.error(f"Error summarizing section {section.section_title}: {e}")
@@ -384,11 +399,26 @@ Format as bullet points. Maximum: {max_tokens * 3} characters."""
 
         try:
             messages = [ChatMessage(role="user", content=prompt)]
+
+            # Use higher token limit for key point extraction
+            extraction_max_tokens = max(max_tokens, 800)  # Ensure minimum of 800 tokens
+
             response = await self.light_model_client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=max_tokens
+                max_tokens=extraction_max_tokens
             )
+
+            # Enhanced validation for key point extraction
+            if response.finish_reason in ['length', 'max_tokens']:
+                logger.warning(f"Key point extraction for section '{section.section_title}' was truncated. "
+                             f"Consider increasing max_tokens. Current length: {len(response.content)}")
+
+            if not response.content or len(response.content.strip()) < 10:
+                logger.warning(f"Key point extraction for section '{section.section_title}' appears too short or empty. "
+                             f"Content: '{response.content[:50]}...', "
+                             f"Finish reason: {response.finish_reason}")
+
             return response.content
         except Exception as e:
             logger.error(f"Error extracting key points from {section.section_title}: {e}")

@@ -235,8 +235,10 @@ class LegalRAGApp {
 
         const question = e.currentTarget.dataset.question;
         if (question) {
-          this.messageInput.value = question;
-          this.sendMessage();
+          // Extract button text (remove icon and trim)
+          const buttonText = e.currentTarget.textContent.trim();
+          // Send the full question to LLM but display only button text in chat
+          this.sendMessage(question, buttonText);
         }
       });
     });
@@ -1105,8 +1107,10 @@ class LegalRAGApp {
     }
   }
 
-  async sendMessage() {
-    const message = this.messageInput.value.trim();
+  async sendMessage(apiMessage = null, displayMessage = null) {
+    // Use provided messages or fall back to input value
+    const message = apiMessage || this.messageInput.value.trim();
+    const chatDisplayMessage = displayMessage || message;
     if (!message) return;
 
     // Determine which documents to search
@@ -1125,8 +1129,8 @@ class LegalRAGApp {
       return;
     }
 
-    // Add user message
-    this.addMessage(message, "user");
+    // Add user message (use display message for chat, API message for backend)
+    this.addMessage(chatDisplayMessage, "user");
     this.messageInput.value = "";
 
     // Add loading message
@@ -1686,9 +1690,8 @@ class LegalRAGApp {
     // Hide modal
     this.hideProlongDurationModal();
 
-    // Set the question and send it
-    this.messageInput.value = question;
-    this.sendMessage();
+    // Send the full question to LLM but display only "Prolong Duration" in chat
+    this.sendMessage(question, "Prolong Duration");
 
     this.showToast(
       `Contract prolongation requested until ${formattedDate}`,

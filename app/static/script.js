@@ -795,6 +795,16 @@ class LegalRAGApp {
   }
 
   handleDocumentClick(e) {
+    // Don't handle click if it's on a button or checkbox
+    if (
+      e.target.tagName === "BUTTON" ||
+      e.target.tagName === "INPUT" ||
+      e.target.closest(".btn-delete") ||
+      e.target.closest('input[type="checkbox"]')
+    ) {
+      return;
+    }
+
     const item = e.currentTarget;
     const documentId = item.dataset.documentId;
     const index = parseInt(item.dataset.index);
@@ -812,16 +822,28 @@ class LegalRAGApp {
         }
       }
     } else if (isCtrlPressed) {
-      // Toggle selection
+      // Toggle selection (allows multiple documents to be selected)
       if (this.selectedDocuments.has(documentId)) {
         this.selectedDocuments.delete(documentId);
       } else {
         this.selectedDocuments.add(documentId);
       }
     } else {
-      // Single selection
-      this.selectedDocuments.clear();
-      this.selectedDocuments.add(documentId);
+      // For normal clicks, toggle selection (changed from single selection to toggle)
+      if (
+        this.selectedDocuments.has(documentId) &&
+        this.selectedDocuments.size === 1
+      ) {
+        // If only this document is selected, deselect it
+        this.selectedDocuments.delete(documentId);
+      } else {
+        // Otherwise, toggle this document's selection
+        if (this.selectedDocuments.has(documentId)) {
+          this.selectedDocuments.delete(documentId);
+        } else {
+          this.selectedDocuments.add(documentId);
+        }
+      }
     }
 
     this.lastSelectedIndex = index;
@@ -854,9 +876,44 @@ class LegalRAGApp {
 
     // Update selection controls
     const selectedCount = this.selectedDocuments.size;
+    const totalVisibleCount = this.filteredDocuments.slice(
+      (this.currentPage - 1) * this.pageSize,
+      this.currentPage * this.pageSize
+    ).length;
+
     this.bulkActions.style.display = selectedCount > 0 ? "flex" : "none";
     this.clearSelectionBtn.style.display =
       selectedCount > 0 ? "inline-flex" : "none";
+
+    // Update select all button text
+    const documentsOnPage = this.filteredDocuments.slice(
+      (this.currentPage - 1) * this.pageSize,
+      this.currentPage * this.pageSize
+    );
+    const allOnPageSelected =
+      documentsOnPage.length > 0 &&
+      documentsOnPage.every((doc) => this.selectedDocuments.has(doc.id));
+
+    if (allOnPageSelected) {
+      this.selectAllBtn.innerHTML =
+        '<i class="fas fa-square"></i> Deselect All';
+    } else if (selectedCount === 0) {
+      this.selectAllBtn.innerHTML =
+        '<i class="fas fa-check-square"></i> Select All';
+    } else {
+      this.selectAllBtn.innerHTML = `<i class="fas fa-check-square"></i> Select All (${selectedCount} selected)`;
+    }
+
+    // Update selection info with count
+    const selectionInfo = document.querySelector(".selection-info span");
+    if (selectedCount > 0) {
+      selectionInfo.textContent = `${selectedCount} document${
+        selectedCount === 1 ? "" : "s"
+      } selected • Click to select/deselect • Hold Ctrl/Cmd for multi-select • Shift for range`;
+    } else {
+      selectionInfo.textContent =
+        "Click to select/deselect • Hold Ctrl/Cmd for multi-select • Shift for range";
+    }
 
     // Update chat placeholder
     this.enableChat();
@@ -869,9 +926,22 @@ class LegalRAGApp {
       this.currentPage * this.pageSize
     );
 
-    documentsOnPage.forEach((doc) => {
-      this.selectedDocuments.add(doc.id);
-    });
+    // Check if all documents on the current page are selected
+    const allSelected = documentsOnPage.every((doc) =>
+      this.selectedDocuments.has(doc.id)
+    );
+
+    if (allSelected && documentsOnPage.length > 0) {
+      // If all are selected, deselect all on this page
+      documentsOnPage.forEach((doc) => {
+        this.selectedDocuments.delete(doc.id);
+      });
+    } else {
+      // Otherwise, select all on this page
+      documentsOnPage.forEach((doc) => {
+        this.selectedDocuments.add(doc.id);
+      });
+    }
 
     this.updateSelectionDisplay();
   }

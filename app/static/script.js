@@ -61,6 +61,7 @@ class LegalRAGApp {
     this.clearSelectionBtn = document.getElementById("clearSelectionBtn");
     this.bulkActions = document.getElementById("bulkActions");
     this.deleteSelected = document.getElementById("deleteSelected");
+    this.versionManagementBtn = document.getElementById("versionManagementBtn");
 
     // Pagination elements
     this.pagination = document.getElementById("pagination");
@@ -136,6 +137,9 @@ class LegalRAGApp {
     );
     this.deleteSelected.addEventListener("click", () =>
       this.deleteSelectedDocuments()
+    );
+    this.versionManagementBtn.addEventListener("click", () =>
+      this.openVersionManagement()
     );
 
     // Pagination
@@ -905,6 +909,14 @@ class LegalRAGApp {
     } finally {
       this.hideLoading();
     }
+  }
+
+  openVersionManagement() {
+    // Navigate to the version management page
+    window.open(
+      `${this.apiBase}/api/v1/documents/version-management`,
+      "_blank"
+    );
   }
 
   getStatusClass(status) {

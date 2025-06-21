@@ -1693,13 +1693,328 @@ class LegalRAGApp {
     // Hide modal
     this.hideProlongDurationModal();
 
-    // Send the full question to LLM but display only "Prolong Duration" in chat
-    this.sendMessage(question, "Prolong Duration");
+    // Send message for PDF generation instead of regular chat
+    this.sendMessageForPDF(question, formattedDate);
 
     this.showToast(
-      `Contract prolongation requested until ${formattedDate}`,
+      `Generating contract amendment document for ${formattedDate}...`,
       "info"
     );
+  }
+
+  async sendMessageForPDF(message, selectedDate) {
+    // Determine which documents to search
+    let documentIds = [];
+    if (this.selectedDocuments.size > 0) {
+      documentIds = Array.from(this.selectedDocuments);
+    } else {
+      // If no documents selected, use all completed documents
+      documentIds = this.allDocuments
+        .filter((doc) => doc.processing_status === "completed")
+        .map((doc) => doc.id);
+    }
+
+    if (documentIds.length === 0) {
+      this.showToast(
+        "No documents available for amendment generation",
+        "error"
+      );
+      return;
+    }
+
+    this.showLoading("Generating contract amendment...");
+
+    try {
+      // Choose endpoint based on analysis mode
+      const endpoint = this.detailedAnalysisMode
+        ? "/api/v1/chat/query"
+        : "/api/v1/chat/iterative";
+
+      const requestBody = {
+        message: message,
+        document_ids: documentIds,
+        llm_provider: this.llmProvider,
+        session_id: this.currentSessionId,
+      };
+
+      // Add detailed analysis parameters if enabled
+      if (this.detailedAnalysisMode) {
+        requestBody.detailed_analysis_mode = true;
+        requestBody.enable_contradiction_detection =
+          this.enableContradictionDetection;
+        requestBody.enable_temporal_tracking = this.enableTemporalTracking;
+        requestBody.enable_cross_document_reasoning =
+          this.enableCrossDocumentReasoning;
+        requestBody.max_analysis_tokens = this.maxAnalysisTokens;
+        requestBody.use_iterative_rag = false; // Use multi-stage instead
+      }
+
+      // DEBUG: Log the request being sent
+      console.log("PDF Generation Request:", {
+        endpoint: `${this.apiBase}${endpoint}`,
+        requestBody: requestBody,
+        selectedDate: selectedDate,
+        documentIds: documentIds,
+      });
+
+      const response = await fetch(`${this.apiBase}${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = await response.json();
+
+      // DEBUG: Log the response received
+      console.log("PDF Generation Response:", {
+        status: response.status,
+        ok: response.ok,
+        data: data,
+        responseType: typeof data.response,
+        responseLength: data.response ? data.response.length : 0,
+      });
+
+      if (response.ok) {
+        this.currentSessionId = data.session_id;
+
+        // DEBUG: Log the content before PDF generation
+        console.log("Content for PDF generation:", {
+          selectedDate: selectedDate,
+          content: data.response,
+          contentPreview: data.response
+            ? data.response.substring(0, 200) + "..."
+            : "No content",
+        });
+
+        // Generate and download PDF instead of showing in chat
+        this.generateAndDownloadPDF(data.response, selectedDate);
+
+        this.showToast(
+          "Contract amendment generated and downloaded successfully!",
+          "success"
+        );
+      } else {
+        console.error("API Error:", data);
+        throw new Error(data.detail || "Amendment generation error");
+      }
+    } catch (error) {
+      console.error("PDF Generation Error:", error);
+      this.showToast(`Amendment generation error: ${error.message}`, "error");
+    } finally {
+      this.hideLoading();
+    }
+  }
+
+  generateAndDownloadPDF(content, selectedDate) {
+    // DEBUG: Log PDF generation start
+    console.log("Starting PDF generation:", {
+      content: content,
+      contentType: typeof content,
+      contentLength: content ? content.length : 0,
+      selectedDate: selectedDate,
+    });
+
+    // Create a new window for PDF generation
+    const printWindow = window.open("", "_blank");
+
+    if (!printWindow) {
+      console.error("Failed to open print window - popup blocked?");
+      this.showToast(
+        "PDF generation failed - please allow popups for this site",
+        "error"
+      );
+      return;
+    }
+
+    // Get current date for filename and document
+    const today = new Date();
+    const dateString = today.toISOString().split("T")[0];
+    const timeString = today.toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    // Format content for PDF
+    const formattedContent = this.formatContentForPDF(content);
+    console.log("Formatted content for PDF:", {
+      originalContent: content,
+      formattedContent: formattedContent,
+      formattedLength: formattedContent ? formattedContent.length : 0,
+    });
+
+    // Create HTML content for PDF
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Contract Amendment - ${selectedDate}</title>
+          <meta charset="UTF-8">
+          <style>
+            @page {
+              margin: 1in;
+              size: letter;
+            }
+            body {
+              font-family: 'Times New Roman', serif;
+              font-size: 12pt;
+              line-height: 1.5;
+              color: #000;
+              max-width: none;
+              margin: 0;
+              padding: 0;
+            }
+            .header {
+              text-align: center;
+              margin-bottom: 30px;
+              border-bottom: 2px solid #000;
+              padding-bottom: 15px;
+            }
+            .header h1 {
+              font-size: 16pt;
+              font-weight: bold;
+              margin: 0;
+              text-transform: uppercase;
+            }
+            .document-info {
+              margin-bottom: 25px;
+              font-size: 10pt;
+              text-align: right;
+            }
+            .content {
+              text-align: justify;
+              margin-bottom: 40px;
+            }
+            .content h2, .content h3, .content h4 {
+              font-weight: bold;
+              margin-top: 20px;
+              margin-bottom: 10px;
+            }
+            .content h2 { font-size: 14pt; }
+            .content h3 { font-size: 13pt; }
+            .content h4 { font-size: 12pt; }
+            .content p {
+              margin-bottom: 12px;
+              text-indent: 0.5in;
+            }
+            .content p:first-child {
+              text-indent: 0;
+            }
+            .signature-section {
+              margin-top: 50px;
+              page-break-inside: avoid;
+            }
+            .signature-line {
+              border-bottom: 1px solid #000;
+              width: 300px;
+              height: 40px;
+              margin: 20px 0 5px 0;
+              display: inline-block;
+            }
+            .signature-label {
+              font-size: 10pt;
+              margin-left: 10px;
+            }
+            .footer {
+              margin-top: 30px;
+              font-size: 10pt;
+              text-align: center;
+              border-top: 1px solid #ccc;
+              padding-top: 10px;
+            }
+            @media print {
+              body { -webkit-print-color-adjust: exact; }
+              .no-print { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Contract Amendment</h1>
+          </div>
+          
+          <div class="document-info">
+            <strong>Generated:</strong> ${dateString} at ${timeString}<br>
+            <strong>Amendment Date:</strong> ${selectedDate}
+          </div>
+          
+          <div class="content">
+            ${formattedContent}
+          </div>
+          
+          <div class="signature-section">
+            <p><strong>SIGNATURES:</strong></p>
+            <br>
+            <div class="signature-line"></div>
+            <div class="signature-label">Party 1 Signature &nbsp;&nbsp;&nbsp;&nbsp; Date: ___________</div>
+            <br><br>
+            <div class="signature-line"></div>
+            <div class="signature-label">Party 2 Signature &nbsp;&nbsp;&nbsp;&nbsp; Date: ___________</div>
+          </div>
+          
+          <div class="footer">
+            <p>This document was generated automatically. Please review carefully before signing.</p>
+          </div>
+          
+          <script>
+            // Auto-print when loaded
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+                window.close();
+              }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    // DEBUG: Log final HTML content
+    console.log("Generated HTML for PDF:", {
+      htmlContentLength: htmlContent.length,
+      htmlPreview: htmlContent.substring(0, 500) + "...",
+      printWindowExists: !!printWindow,
+    });
+
+    try {
+      // Write content to new window and trigger print
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      console.log("Successfully wrote content to print window");
+    } catch (error) {
+      console.error("Error writing to print window:", error);
+      this.showToast("Error generating PDF document", "error");
+    }
+  }
+
+  formatContentForPDF(content) {
+    // Convert markdown-like content to HTML suitable for PDF
+    let formattedContent = content;
+
+    // Convert markdown headers to HTML
+    formattedContent = formattedContent.replace(/^### (.*$)/gim, "<h3>$1</h3>");
+    formattedContent = formattedContent.replace(/^## (.*$)/gim, "<h2>$1</h2>");
+    formattedContent = formattedContent.replace(/^# (.*$)/gim, "<h2>$1</h2>");
+
+    // Convert bold text
+    formattedContent = formattedContent.replace(
+      /\*\*(.*?)\*\*/g,
+      "<strong>$1</strong>"
+    );
+
+    // Convert italic text
+    formattedContent = formattedContent.replace(/\*(.*?)\*/g, "<em>$1</em>");
+
+    // Convert line breaks to paragraphs
+    const paragraphs = formattedContent.split("\n\n");
+    formattedContent = paragraphs
+      .filter((p) => p.trim().length > 0)
+      .map((p) => `<p>${p.trim().replace(/\n/g, "<br>")}</p>`)
+      .join("");
+
+    return formattedContent;
   }
 
   showToast(message, type = "info") {

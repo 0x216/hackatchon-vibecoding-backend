@@ -21,7 +21,7 @@
         <div class="header-content">
           <div class="logo">
             <i class="fas fa-balance-scale"></i>
-            <h1>Memora</h1>
+            <h1>Memora - Legal Memory System</h1>
           </div>
           <div class="status" id="status">
             <img
@@ -365,6 +365,13 @@
                   data-question="Summarize key obligations from all documents"
                 >
                   <i class="fas fa-list-ul"></i> Key Obligations
+                </button>
+                <button
+                  class="quick-btn"
+                  id="checkDueDateBtn"
+                  data-question="Check the due dates of the documents and return information regarding their validity, for each document you should only return 'Valid until: {documentValidityDate}', or 'Invalid', or 'No due date', nothing else. Today's date is {todayDate}"
+                >
+                  <i class="fas fa-calendar-check"></i> Check Due Date(s)
                 </button>
                 <button class="quick-btn" id="prolongDurationBtn">
                   <i class="fas fa-calendar-plus"></i> Prolong Duration

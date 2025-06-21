@@ -237,8 +237,20 @@ class LegalRAGApp {
         if (question) {
           // Extract button text (remove icon and trim)
           const buttonText = e.currentTarget.textContent.trim();
+
+          // Special handling for check due date button - inject today's date
+          let finalQuestion = question;
+          if (e.currentTarget.id === "checkDueDateBtn") {
+            const today = new Date().toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+            });
+            finalQuestion = question.replace("{todayDate}", today);
+          }
+
           // Send the full question to LLM but display only button text in chat
-          this.sendMessage(question, buttonText);
+          this.sendMessage(finalQuestion, buttonText);
         }
       });
     });
@@ -544,7 +556,7 @@ class LegalRAGApp {
           <button class="modal-close">&times;</button>
         </div>
         <div class="modal-body">
-          <p>Newest document already present</p>
+          <p>Newest documents already present</p>
         </div>
       </div>
     `;
@@ -578,7 +590,7 @@ class LegalRAGApp {
           <button class="modal-close">&times;</button>
         </div>
         <div class="modal-body">
-          <p>Newest document already present</p>
+          <p>Newest document versions already present</p>
         </div>
       </div>
     `;

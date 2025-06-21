@@ -562,7 +562,7 @@ async def search_across_versions(
                d.document_family_id, d.upload_date, d.is_latest_version
         FROM documents d
         WHERE d.extracted_text IS NOT NULL
-        AND d.processing_status = 'processed'
+        AND d.processing_status = 'completed'
         """
 
         params = {"query": f"%{query}%", "limit": limit}
@@ -704,7 +704,7 @@ async def advanced_cross_version_search(
         FROM documents d
         LEFT JOIN document_versions dv ON d.id = dv.document_id
         WHERE d.extracted_text IS NOT NULL
-        AND d.processing_status = 'processed'
+        AND d.processing_status = 'completed'
         AND d.extracted_text ILIKE :query
         """
 
@@ -1016,7 +1016,7 @@ async def get_performance_stats(db: AsyncSession = Depends(get_db)):
             text("""
             SELECT
                 (SELECT COUNT(*) FROM documents) as total_documents,
-                (SELECT COUNT(*) FROM documents WHERE processing_status = 'processed') as processed_documents,
+                (SELECT COUNT(*) FROM documents WHERE processing_status = 'completed') as processed_documents,
                 (SELECT COUNT(DISTINCT document_family_id) FROM documents WHERE document_family_id IS NOT NULL) as total_families,
                 (SELECT COUNT(*) FROM document_changes) as total_changes,
                 (SELECT COUNT(*) FROM search_history) as total_searches,

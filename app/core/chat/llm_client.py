@@ -3,7 +3,9 @@ from typing import Dict, List, Any, Optional
 import httpx
 import json
 import logging
+import asyncio
 from pydantic import BaseModel
+import os
 
 from app.utils.config import settings
 
@@ -181,6 +183,125 @@ class OpenAIClient(LLMClient):
             raise
 
 
+class VertexAIClient(LLMClient):
+    """Google Vertex AI client for Gemini models."""
+
+    def __init__(self, project_id: str = None, location: str = "us-central1", model_name: str = "gemini-2.5-pro"):
+        self.project_id = project_id or getattr(settings, 'vertex_ai_project_id', None)
+        self.location = location or getattr(settings, 'vertex_ai_location', 'us-central1')
+        self.model_name = model_name or getattr(settings, 'vertex_ai_model', 'gemini-2.5-pro')
+        self.default_model = self.model_name
+
+        # Initialize Vertex AI
+        try:
+            import vertexai
+            from vertexai.generative_models import GenerativeModel
+
+            if not self.project_id:
+                logger.warning("Vertex AI project ID not provided. Set VERTEX_AI_PROJECT_ID environment variable.")
+                return
+
+            vertexai.init(project=self.project_id, location=self.location)
+            self.model = GenerativeModel(self.model_name)
+            logger.info(f"Initialized Vertex AI client with project: {self.project_id}, location: {self.location}, model: {self.model_name}")
+
+        except ImportError:
+            logger.error("vertexai package not installed. Install with: pip install vertexai")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to initialize Vertex AI: {e}")
+            raise
+
+    async def chat_completion(
+        self,
+        messages: List[ChatMessage],
+        model: str = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000
+    ) -> LLMResponse:
+        """Generate chat completion using Vertex AI Gemini."""
+
+        if not hasattr(self, 'model') or self.model is None:
+            raise ValueError("Vertex AI client not properly initialized")
+
+        try:
+            from vertexai.generative_models import GenerationConfig
+
+            # Convert messages to Vertex AI format
+            # Vertex AI expects a conversation format
+            conversation_parts = []
+
+            for msg in messages:
+                if msg.role == "system":
+                    # System messages are handled as part of the first user message
+                    continue
+                elif msg.role == "user":
+                    conversation_parts.append(f"User: {msg.content}")
+                elif msg.role == "assistant":
+                    conversation_parts.append(f"Assistant: {msg.content}")
+
+            # Add system prompt if present
+            system_messages = [msg.content for msg in messages if msg.role == "system"]
+            if system_messages:
+                system_prompt = "\n".join(system_messages)
+                prompt = f"System: {system_prompt}\n\n" + "\n".join(conversation_parts)
+            else:
+                prompt = "\n".join(conversation_parts)
+
+            # Configure generation parameters
+            generation_config = GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+
+            # Generate response
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
+            )
+
+            # Extract content from response
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                content = candidate.content.parts[0].text if candidate.content.parts else ""
+
+                # Extract usage information if available
+                usage_metadata = getattr(response, 'usage_metadata', None)
+                usage = None
+                if usage_metadata:
+                    usage = {
+                        "prompt_tokens": getattr(usage_metadata, 'prompt_token_count', 0),
+                        "completion_tokens": getattr(usage_metadata, 'candidates_token_count', 0),
+                        "total_tokens": getattr(usage_metadata, 'total_token_count', 0)
+                    }
+
+                # Convert finish_reason enum to string if present
+                finish_reason_raw = getattr(candidate, 'finish_reason', None)
+                finish_reason = None
+                if finish_reason_raw is not None:
+                    # Handle Vertex AI FinishReason enum
+                    if hasattr(finish_reason_raw, 'name'):
+                        finish_reason = finish_reason_raw.name.lower()
+                    else:
+                        finish_reason = str(finish_reason_raw).lower()
+
+                return LLMResponse(
+                    content=content,
+                    usage=usage,
+                    model=model or self.default_model,
+                    finish_reason=finish_reason
+                )
+            else:
+                raise ValueError("No response candidates returned from Vertex AI")
+
+        except Exception as e:
+            logger.error(f"Error calling Vertex AI: {e}")
+            raise
+
+
 class MockLLMClient(LLMClient):
     """Mock LLM client for testing."""
     
@@ -219,11 +340,13 @@ class LLMClientFactory:
     @staticmethod
     def create_client(provider: str = "groq", **kwargs) -> LLMClient:
         """Create LLM client based on provider."""
-        
+
         if provider.lower() == "groq":
             return GroqClient(**kwargs)
         elif provider.lower() == "openai":
             return OpenAIClient(**kwargs)
+        elif provider.lower() == "vertexai" or provider.lower() == "vertex_ai":
+            return VertexAIClient(**kwargs)
         elif provider.lower() == "mock":
             return MockLLMClient()
         else:
@@ -232,14 +355,16 @@ class LLMClientFactory:
     @staticmethod
     def get_default_client() -> LLMClient:
         """Get default LLM client based on configuration."""
-        
+
         # Try to determine the best available client
         provider = getattr(settings, 'llm_provider', 'groq')
-        
+
         if provider == 'groq' and getattr(settings, 'groq_api_key', None):
             return GroqClient()
         elif provider == 'openai' and getattr(settings, 'openai_api_key', None):
             return OpenAIClient()
+        elif provider in ['vertexai', 'vertex_ai'] and getattr(settings, 'vertex_ai_project_id', None):
+            return VertexAIClient()
         else:
             logger.warning("No LLM API key configured. Using mock client.")
             return MockLLMClient()

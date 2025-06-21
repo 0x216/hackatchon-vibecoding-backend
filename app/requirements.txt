@@ -47,3 +47,5 @@ aiosqlite==0.20.0
 
 # Monitoring and logging
 structlog==25.4.0
+
+vertexai==1.71.1

@@ -457,7 +457,7 @@ async def detect_document_version(
             SELECT id, filename, extracted_text, document_family_id, version_number
             FROM documents
             WHERE extracted_text IS NOT NULL
-            AND processing_status = 'processed'
+            AND processing_status = 'completed'
             ORDER BY upload_date DESC
             """)
         )

@@ -3,7 +3,7 @@ class LegalRAGAppDemo {
     constructor() {
         this.selectedDocument = null;
         this.currentSessionId = 'demo-session-123';
-        this.llmProvider = 'groq';
+        this.llmProvider = 'vertexai';
         this.demoMode = true;
         
         this.initializeElements();
@@ -11,6 +11,7 @@ class LegalRAGAppDemo {
         this.loadDemoDocuments();
         this.setDemoStatus();
         this.showDemoWelcome();
+        this.loadDemoLLMProviders();
     }
 
     initializeElements() {
@@ -70,9 +71,9 @@ class LegalRAGAppDemo {
     updateStatus(message, type) {
         const statusElement = this.status.querySelector('span');
         const dotElement = this.status.querySelector('.status-dot');
-        
+
         statusElement.textContent = message;
-        
+
         if (type === 'demo') {
             dotElement.style.color = '#ffd700';
         } else if (type === 'online') {
@@ -80,6 +81,31 @@ class LegalRAGAppDemo {
         } else {
             dotElement.style.color = '#f56565';
         }
+    }
+
+    // Load demo LLM providers
+    loadDemoLLMProviders() {
+        const demoProviders = [
+            { id: 'groq', name: 'Groq (DEMO)', available: true },
+            { id: 'openai', name: 'OpenAI (DEMO)', available: true },
+            { id: 'vertexai', name: 'Vertex AI (DEMO)', available: true },
+            { id: 'mock', name: 'Mock (DEMO)', available: true }
+        ];
+
+        // Clear existing options
+        this.llmSelector.innerHTML = '';
+
+        // Add demo providers
+        demoProviders.forEach(provider => {
+            const option = document.createElement('option');
+            option.value = provider.id;
+            option.textContent = provider.name;
+            this.llmSelector.appendChild(option);
+        });
+
+        // Set default to vertexai
+        this.llmSelector.value = 'vertexai';
+        this.llmProvider = 'vertexai';
     }
 
     showDemoWelcome() {

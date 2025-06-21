@@ -41,9 +41,14 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.7
     
     # LLM Provider settings
-    llm_provider: str = "groq"  # groq, openai, mock
+    llm_provider: str = "vertexai"  # groq, openai, vertexai, mock
     groq_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
+
+    # Vertex AI settings
+    vertex_ai_project_id: Optional[str] = None
+    vertex_ai_location: str = "us-central1"
+    vertex_ai_model: str = "gemini-2.5-pro"
     
     class Config:
         env_file = ".env"

@@ -68,7 +68,7 @@ async def resolve_version_aware_documents(request: 'ChatRequest', db: AsyncSessi
                 FROM documents d
                 WHERE (d.document_family_id = ANY(:family_ids) OR d.id = ANY(:family_ids))
                 AND d.is_latest_version = TRUE
-                AND d.processing_status = 'processed'
+                AND d.processing_status = 'completed'
                 """),
                 {"family_ids": request.family_ids}
             )
@@ -78,7 +78,7 @@ async def resolve_version_aware_documents(request: 'ChatRequest', db: AsyncSessi
                 SELECT d.id
                 FROM documents d
                 WHERE (d.document_family_id = ANY(:family_ids) OR d.id = ANY(:family_ids))
-                AND d.processing_status = 'processed'
+                AND d.processing_status = 'completed'
                 """),
                 {"family_ids": request.family_ids}
             )
@@ -92,7 +92,7 @@ async def resolve_version_aware_documents(request: 'ChatRequest', db: AsyncSessi
             SELECT d.id
             FROM documents d
             WHERE d.is_latest_version = TRUE
-            AND d.processing_status = 'processed'
+            AND d.processing_status = 'completed'
             """)
         )
     else:
@@ -100,7 +100,7 @@ async def resolve_version_aware_documents(request: 'ChatRequest', db: AsyncSessi
             text("""
             SELECT d.id
             FROM documents d
-            WHERE d.processing_status = 'processed'
+            WHERE d.processing_status = 'completed'
             """)
         )
 
@@ -151,7 +151,7 @@ async def add_version_context(response_data: dict, document_ids: List[str], db: 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
-    llm_provider: Optional[str] = "groq"
+    llm_provider: Optional[str] = None  # Will use configured default if None
     document_ids: Optional[List[str]] = []
     use_iterative_rag: bool = True
     max_iterations: int = 3
@@ -161,13 +161,20 @@ class ChatRequest(BaseModel):
     family_ids: Optional[List[str]] = None  # Document family IDs
     include_version_context: bool = True  # Include version info in responses
 
+    # Multi-stage legal analysis parameters
+    detailed_analysis_mode: bool = False  # Enable comprehensive legal document analysis
+    enable_contradiction_detection: bool = True  # Detect contradictions across documents
+    enable_temporal_tracking: bool = True  # Track legal positions over time
+    enable_cross_document_reasoning: bool = True  # Enable cross-document relationship analysis
+    max_analysis_tokens: int = 300000  # Maximum tokens for final analysis stage
+
 
 class ChatResponse(BaseModel):
     response: str  # Changed from 'message' to 'response' for frontend compatibility
     session_id: str
     sources: List[dict] = []
     metadata: Optional[dict] = None
-    
+
     # Legacy fields for backward compatibility
     message: Optional[str] = None
     model_used: Optional[str] = None
@@ -175,6 +182,14 @@ class ChatResponse(BaseModel):
     rag_approach: str = "traditional"
     iterations_used: Optional[int] = None
     total_chunks_found: Optional[int] = None
+
+    # Enhanced analysis results for detailed mode
+    legal_analysis: Optional[dict] = None  # Comprehensive legal insights
+    contradictions: Optional[List[dict]] = None  # Detected contradictions
+    temporal_analysis: Optional[dict] = None  # Legal position evolution
+    cross_document_relationships: Optional[List[dict]] = None  # Document relationships
+    processing_stages: Optional[List[dict]] = None  # Multi-stage processing details
+    token_usage: Optional[dict] = None  # Detailed token usage across stages
 
 
 @router.post("/query", response_model=ChatResponse)
@@ -227,11 +242,46 @@ async def chat_query(
         # Resolve document IDs based on version mode
         resolved_document_ids = await resolve_version_aware_documents(request, db)
 
-        # Initialize LLM client
-        llm_client = LLMClientFactory.create_client(request.llm_provider or "groq")
+        # Initialize LLM client with configured default
+        from app.utils.config import settings
+        default_provider = getattr(settings, 'llm_provider', 'groq')
+        llm_client = LLMClientFactory.create_client(request.llm_provider or default_provider)
 
         # Choose RAG approach based on request
-        if request.use_iterative_rag:
+        if request.detailed_analysis_mode:
+            # Use Multi-Stage RAG for comprehensive legal analysis
+            from app.core.analysis.multi_stage_rag_generator import MultiStageRAGGenerator, MultiStageConfig
+
+            config = MultiStageConfig(
+                enable_contradiction_detection=request.enable_contradiction_detection,
+                enable_temporal_tracking=request.enable_temporal_tracking,
+                enable_cross_document_reasoning=request.enable_cross_document_reasoning,
+                max_final_tokens=request.max_analysis_tokens
+            )
+
+            multi_stage_generator = MultiStageRAGGenerator(db_session=db, config=config)
+
+            multi_stage_result = await multi_stage_generator.generate_comprehensive_analysis(
+                query=request.message,
+                document_ids=resolved_document_ids,
+                session_id=session_id
+            )
+
+            # Convert multi-stage result to standard response format
+            rag_response = {
+                'response': multi_stage_result.final_response,
+                'sources': [],  # Could be enhanced to extract sources from stages
+                'metadata': multi_stage_result.processing_metadata,
+                'legal_analysis': multi_stage_result.legal_analysis.__dict__ if multi_stage_result.legal_analysis else None,
+                'contradictions': [c.__dict__ for c in multi_stage_result.legal_analysis.contradictions] if multi_stage_result.legal_analysis else None,
+                'temporal_analysis': multi_stage_result.legal_analysis.temporal_analysis if multi_stage_result.legal_analysis else None,
+                'cross_document_relationships': multi_stage_result.legal_analysis.cross_document_insights if multi_stage_result.legal_analysis else None,
+                'processing_stages': [s.__dict__ for s in multi_stage_result.stage_results],
+                'token_usage': multi_stage_result.token_allocation.allocation_metadata if multi_stage_result.token_allocation else None,
+                'fallback_used': multi_stage_result.fallback_used
+            }
+
+        elif request.use_iterative_rag:
             # Use Iterative RAG for complex queries
             retriever = EnhancedDocumentRetriever()
             rag_generator = IterativeRAGGenerator(llm_client=llm_client, retriever=retriever)
@@ -279,16 +329,24 @@ async def chat_query(
         }
         
         return ChatResponse(
-            response=rag_response["content"],
-            message=rag_response["content"],  # Legacy compatibility
+            response=rag_response.get("response", rag_response.get("content", "")),
+            message=rag_response.get("response", rag_response.get("content", "")),  # Legacy compatibility
             session_id=session_id,
             sources=rag_response.get("sources", []),
             metadata=metadata,
             model_used=rag_response.get("model_used"),
             usage=rag_response.get("usage"),
-            rag_approach="iterative" if request.use_iterative_rag else "traditional",
+            rag_approach="multi_stage" if request.detailed_analysis_mode else ("iterative" if request.use_iterative_rag else "traditional"),
             iterations_used=rag_response.get("iterations_used"),
-            total_chunks_found=rag_response.get("total_chunks_found")
+            total_chunks_found=rag_response.get("total_chunks_found"),
+
+            # Enhanced analysis results for detailed mode
+            legal_analysis=rag_response.get('legal_analysis'),
+            contradictions=rag_response.get('contradictions'),
+            temporal_analysis=rag_response.get('temporal_analysis'),
+            cross_document_relationships=rag_response.get('cross_document_relationships'),
+            processing_stages=rag_response.get('processing_stages'),
+            token_usage=rag_response.get('token_usage')
         )
         
     except HTTPException:
@@ -518,21 +576,96 @@ async def delete_chat_session(
         )
 
 
+@router.get("/providers")
+async def get_available_providers():
+    """Get list of available and configured LLM providers."""
+
+    from app.utils.config import settings
+
+    providers = []
+
+    # Check Groq
+    if getattr(settings, 'groq_api_key', None):
+        providers.append({
+            "id": "groq",
+            "name": "Groq (Fast)",
+            "description": "Fast inference with Llama models",
+            "available": True
+        })
+    else:
+        providers.append({
+            "id": "groq",
+            "name": "Groq (Fast)",
+            "description": "Fast inference with Llama models",
+            "available": False,
+            "reason": "API key not configured"
+        })
+
+    # Check OpenAI
+    if getattr(settings, 'openai_api_key', None):
+        providers.append({
+            "id": "openai",
+            "name": "OpenAI",
+            "description": "GPT models via OpenAI API",
+            "available": True
+        })
+    else:
+        providers.append({
+            "id": "openai",
+            "name": "OpenAI",
+            "description": "GPT models via OpenAI API",
+            "available": False,
+            "reason": "API key not configured"
+        })
+
+    # Check Vertex AI
+    if getattr(settings, 'vertex_ai_project_id', None):
+        providers.append({
+            "id": "vertexai",
+            "name": "Vertex AI (Gemini)",
+            "description": "Google's Gemini models via Vertex AI",
+            "available": True,
+            "model": getattr(settings, 'vertex_ai_model', 'gemini-2.5-pro'),
+            "location": getattr(settings, 'vertex_ai_location', 'us-central1')
+        })
+    else:
+        providers.append({
+            "id": "vertexai",
+            "name": "Vertex AI (Gemini)",
+            "description": "Google's Gemini models via Vertex AI",
+            "available": False,
+            "reason": "Project ID not configured"
+        })
+
+    # Mock is always available
+    providers.append({
+        "id": "mock",
+        "name": "Test Mode",
+        "description": "Mock responses for testing",
+        "available": True
+    })
+
+    return {
+        "providers": providers,
+        "default": getattr(settings, 'llm_provider', 'groq')
+    }
+
+
 @router.post("/test-llm")
 async def test_llm_connection(llm_provider: str = "groq"):
     """Test LLM connection and response."""
-    
+
     try:
         llm_client = LLMClientFactory.create_client(llm_provider)
-        
+
         # Test with a simple query
         from app.core.chat.llm_client import ChatMessage
         test_messages = [
             ChatMessage(role="user", content="Hello! Please respond with a brief greeting.")
         ]
-        
+
         response = await llm_client.chat_completion(test_messages)
-        
+
         return {
             "status": "success",
             "provider": llm_provider,
@@ -540,7 +673,7 @@ async def test_llm_connection(llm_provider: str = "groq"):
             "response": response.content,
             "usage": response.usage
         }
-        
+
     except Exception as e:
         return {
             "status": "error",

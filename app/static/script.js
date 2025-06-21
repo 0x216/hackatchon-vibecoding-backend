@@ -4,8 +4,15 @@ class LegalRAGApp {
         this.apiBase = 'http://localhost:8000';
         this.selectedDocuments = new Set();
         this.currentSessionId = null;
-        this.llmProvider = 'groq';
+        this.llmProvider = 'vertexai'; // Will be updated from API
         this.searchAllMode = false;
+
+        // Detailed analysis mode settings
+        this.detailedAnalysisMode = false;
+        this.enableContradictionDetection = true;
+        this.enableTemporalTracking = true;
+        this.enableCrossDocumentReasoning = true;
+        this.maxAnalysisTokens = 300000;
         
         // Pagination and filtering
         this.currentPage = 1;
@@ -25,6 +32,7 @@ class LegalRAGApp {
         this.attachEventListeners();
         this.loadDocuments();
         this.checkAPIStatus();
+        this.loadLLMProviders();
     }
 
     initializeElements() {
@@ -65,6 +73,14 @@ class LegalRAGApp {
         this.messageInput = document.getElementById('messageInput');
         this.sendBtn = document.getElementById('sendBtn');
         this.llmSelector = document.getElementById('llmProvider');
+
+        // Analysis mode elements
+        this.detailedAnalysisModeCheckbox = document.getElementById('detailedAnalysisMode');
+        this.analysisConfig = document.getElementById('analysisConfig');
+        this.enableContradictionDetectionCheckbox = document.getElementById('enableContradictionDetection');
+        this.enableTemporalTrackingCheckbox = document.getElementById('enableTemporalTracking');
+        this.enableCrossDocumentReasoningCheckbox = document.getElementById('enableCrossDocumentReasoning');
+        this.maxAnalysisTokensInput = document.getElementById('maxAnalysisTokens');
 
 
 
@@ -115,6 +131,35 @@ class LegalRAGApp {
             this.showToast(`Switched to ${e.target.options[e.target.selectedIndex].text}`, 'info');
         });
 
+        // Analysis mode controls
+        this.detailedAnalysisModeCheckbox.addEventListener('change', (e) => {
+            this.detailedAnalysisMode = e.target.checked;
+            this.toggleAnalysisConfig(e.target.checked);
+            this.updateChatPlaceholder();
+
+            if (e.target.checked) {
+                this.showToast('Detailed analysis mode enabled - responses will be more comprehensive but slower', 'info');
+            } else {
+                this.showToast('Switched to fast mode', 'info');
+            }
+        });
+
+        this.enableContradictionDetectionCheckbox.addEventListener('change', (e) => {
+            this.enableContradictionDetection = e.target.checked;
+        });
+
+        this.enableTemporalTrackingCheckbox.addEventListener('change', (e) => {
+            this.enableTemporalTracking = e.target.checked;
+        });
+
+        this.enableCrossDocumentReasoningCheckbox.addEventListener('change', (e) => {
+            this.enableCrossDocumentReasoning = e.target.checked;
+        });
+
+        this.maxAnalysisTokensInput.addEventListener('change', (e) => {
+            this.maxAnalysisTokens = parseInt(e.target.value);
+        });
+
 
 
         // Quick questions
@@ -144,13 +189,95 @@ class LegalRAGApp {
     updateStatus(message, type) {
         const statusElement = this.status.querySelector('span');
         const dotElement = this.status.querySelector('.status-dot');
-        
+
         statusElement.textContent = message;
-        
+
         if (type === 'online') {
             dotElement.style.color = '#48bb78';
         } else {
             dotElement.style.color = '#f56565';
+        }
+    }
+
+    toggleAnalysisConfig(show) {
+        if (show) {
+            this.analysisConfig.style.display = 'block';
+        } else {
+            this.analysisConfig.style.display = 'none';
+        }
+    }
+
+    updateChatPlaceholder() {
+        if (this.messageInput) {
+            const baseText = this.selectedDocuments.size > 0
+                ? `Ask a question about ${this.selectedDocuments.size} selected document(s)`
+                : 'Ask a question about the documents';
+
+            if (this.detailedAnalysisMode) {
+                this.messageInput.placeholder = `${baseText} (Detailed Analysis Mode)...`;
+            } else {
+                this.messageInput.placeholder = `${baseText}...`;
+            }
+        }
+    }
+
+    // Load available LLM providers
+    async loadLLMProviders() {
+        try {
+            const response = await fetch(`${this.apiBase}/api/chat/providers`);
+            if (response.ok) {
+                const data = await response.json();
+                this.updateLLMSelector(data.providers, data.default);
+            } else {
+                console.warn('Failed to load LLM providers, using defaults');
+            }
+        } catch (error) {
+            console.warn('Error loading LLM providers:', error);
+        }
+    }
+
+    updateLLMSelector(providers, defaultProvider) {
+        // Clear existing options
+        this.llmSelector.innerHTML = '';
+
+        // Add available providers
+        providers.forEach(provider => {
+            const option = document.createElement('option');
+            option.value = provider.id;
+
+            if (provider.available) {
+                option.textContent = provider.name;
+                option.title = provider.description;
+            } else {
+                option.textContent = `${provider.name} (Not configured)`;
+                option.title = `${provider.description} - ${provider.reason}`;
+                option.disabled = true;
+            }
+
+            // Set as selected if it's the default and available
+            if (provider.id === defaultProvider && provider.available) {
+                option.selected = true;
+                this.llmProvider = provider.id;
+            }
+
+            this.llmSelector.appendChild(option);
+        });
+
+        // If no provider is selected, select the first available one
+        if (!this.llmSelector.value) {
+            const firstAvailable = providers.find(p => p.available);
+            if (firstAvailable) {
+                this.llmSelector.value = firstAvailable.id;
+                this.llmProvider = firstAvailable.id;
+
+                // Show informative message about fallback if default was not available
+                const defaultProvider = providers.find(p => p.id === defaultProvider);
+                if (defaultProvider && !defaultProvider.available) {
+                    this.showToast(`Default provider (${defaultProvider.name}) not available: ${defaultProvider.reason}. Using ${firstAvailable.name} instead.`, 'warning');
+                }
+            } else {
+                this.showToast('No LLM providers available. Please configure API keys.', 'error');
+            }
         }
     }
 
@@ -568,6 +695,7 @@ class LegalRAGApp {
 
         // Update chat placeholder
         this.enableChat();
+        this.updateChatPlaceholder();
     }
 
     selectAllDocuments() {
@@ -677,15 +805,12 @@ class LegalRAGApp {
     enableChat() {
         const hasDocuments = this.allDocuments.length > 0;
         const hasSelected = this.selectedDocuments.size > 0 || this.searchAllMode;
-        
+
         this.messageInput.disabled = !hasDocuments;
         this.sendBtn.disabled = !hasDocuments;
-        
+
         if (hasDocuments) {
-            const placeholder = this.selectedDocuments.size > 0
-                ? `Ask a question about ${this.selectedDocuments.size} selected document(s)...`
-                : 'Ask a question about the documents...';
-            this.messageInput.placeholder = placeholder;
+            this.updateChatPlaceholder();
         }
     }
 
@@ -715,15 +840,25 @@ class LegalRAGApp {
         const loadingId = this.addLoadingMessage();
 
         try {
-            // Always use iterative RAG
-            const endpoint = '/api/v1/chat/iterative';
-            
+            // Choose endpoint based on analysis mode
+            const endpoint = this.detailedAnalysisMode ? '/api/chat/query' : '/api/v1/chat/iterative';
+
             const requestBody = {
                 message: message,
                 document_ids: documentIds,
                 llm_provider: this.llmProvider,
                 session_id: this.currentSessionId
             };
+
+            // Add detailed analysis parameters if enabled
+            if (this.detailedAnalysisMode) {
+                requestBody.detailed_analysis_mode = true;
+                requestBody.enable_contradiction_detection = this.enableContradictionDetection;
+                requestBody.enable_temporal_tracking = this.enableTemporalTracking;
+                requestBody.enable_cross_document_reasoning = this.enableCrossDocumentReasoning;
+                requestBody.max_analysis_tokens = this.maxAnalysisTokens;
+                requestBody.use_iterative_rag = false; // Use multi-stage instead
+            }
 
             const response = await fetch(`${this.apiBase}${endpoint}`, {
                 method: 'POST',
@@ -741,8 +876,8 @@ class LegalRAGApp {
                 // Remove loading message
                 this.removeLoadingMessage(loadingId);
                 
-                // Add bot response
-                this.addMessage(data.response, 'bot', data.sources || [], data.metadata);
+                // Add bot response with enhanced analysis if available
+                this.addMessage(data.response, 'bot', data.sources || [], data.metadata, false, data);
                 
                 // Show success toast with stats
                 if (data.metadata) {
@@ -759,7 +894,7 @@ class LegalRAGApp {
         }
     }
 
-    addMessage(content, type, sources = [], metadata = null, isError = false) {
+    addMessage(content, type, sources = [], metadata = null, isError = false, analysisData = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}-message`;
         
@@ -792,6 +927,12 @@ class LegalRAGApp {
             `;
         }
 
+        // Format enhanced analysis results if available
+        let analysisHtml = '';
+        if (analysisData && (analysisData.legal_analysis || analysisData.contradictions || analysisData.processing_stages)) {
+            analysisHtml = this.formatLegalAnalysisResults(analysisData);
+        }
+
         messageDiv.innerHTML = `
             <div class="message-avatar">
                 <i class="${avatarIcon}"></i>
@@ -799,6 +940,7 @@ class LegalRAGApp {
             <div class="message-content">
                 <div class="markdown-content">${type === 'user' ? this.escapeHtml(content) : marked.parse(content)}</div>
                 ${sourcesHtml}
+                ${analysisHtml}
                 ${metadataHtml}
                 <div class="message-time">${timestamp}</div>
             </div>
@@ -915,6 +1057,177 @@ class LegalRAGApp {
 
     hideLoading() {
         this.loadingOverlay.classList.remove('show');
+    }
+
+    formatLegalAnalysisResults(analysisData) {
+        let html = '<div class="legal-analysis-results">';
+
+        // Analysis mode indicator
+        if (analysisData.rag_approach === 'multi_stage') {
+            html += `
+                <div class="analysis-mode-indicator">
+                    <i class="fas fa-brain"></i>
+                    Multi-Stage Legal Analysis
+                </div>
+            `;
+        }
+
+        // Risk Assessment
+        if (analysisData.legal_analysis && analysisData.legal_analysis.risk_assessment) {
+            const risk = analysisData.legal_analysis.risk_assessment;
+            const riskLevel = risk.overall_risk_level || 'unknown';
+            const riskClass = `risk-${riskLevel}`;
+
+            html += `
+                <div class="analysis-section">
+                    <div class="analysis-header">
+                        <i class="fas fa-shield-alt"></i>
+                        Risk Assessment
+                    </div>
+                    <div class="risk-assessment ${riskClass}">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>${riskLevel.toUpperCase()} RISK</strong>
+                        ${risk.risk_score ? `(Score: ${(risk.risk_score * 100).toFixed(0)}%)` : ''}
+                    </div>
+                    ${risk.risk_factors && risk.risk_factors.length > 0 ? `
+                        <div style="margin-top: 0.5rem;">
+                            <small><strong>Risk Factors:</strong> ${risk.risk_factors.join(', ')}</small>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // Contradictions
+        if (analysisData.contradictions && analysisData.contradictions.length > 0) {
+            html += `
+                <div class="analysis-section">
+                    <div class="analysis-header">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        Contradictions Found (${analysisData.contradictions.length})
+                    </div>
+                    <div class="contradictions-list">
+            `;
+
+            analysisData.contradictions.slice(0, 3).forEach(contradiction => {
+                const severityClass = `severity-${contradiction.severity || 'minor'}`;
+                html += `
+                    <div class="contradiction-item">
+                        <div class="contradiction-header">
+                            <span class="contradiction-type">${contradiction.type || 'conflict'}</span>
+                            <span class="contradiction-severity ${severityClass}">${contradiction.severity || 'minor'}</span>
+                        </div>
+                        <div class="contradiction-description">${this.escapeHtml(contradiction.description || 'No description available')}</div>
+                        ${contradiction.confidence ? `<div class="contradiction-confidence">Confidence: ${(contradiction.confidence * 100).toFixed(0)}%</div>` : ''}
+                    </div>
+                `;
+            });
+
+            if (analysisData.contradictions.length > 3) {
+                html += `<div style="text-align: center; margin-top: 0.5rem;"><small>... and ${analysisData.contradictions.length - 3} more</small></div>`;
+            }
+
+            html += '</div></div>';
+        }
+
+        // Processing Stages
+        if (analysisData.processing_stages && analysisData.processing_stages.length > 0) {
+            html += `
+                <div class="analysis-section">
+                    <div class="analysis-header">
+                        <i class="fas fa-cogs"></i>
+                        Processing Pipeline
+                    </div>
+                    <div class="processing-stages">
+            `;
+
+            analysisData.processing_stages.forEach(stage => {
+                const statusClass = stage.success ? 'stage-success' : 'stage-error';
+                const statusIcon = stage.success ? 'fas fa-check' : 'fas fa-times';
+
+                html += `
+                    <div class="stage-item">
+                        <div class="stage-status ${statusClass}">
+                            <i class="${statusIcon}"></i>
+                        </div>
+                        <div class="stage-info">
+                            <div class="stage-name">${this.formatStageName(stage.stage_name)}</div>
+                            <div class="stage-details">
+                                ${stage.duration_seconds ? `${stage.duration_seconds.toFixed(1)}s` : ''}
+                                ${stage.token_count ? `• ${stage.token_count.toLocaleString()} tokens` : ''}
+                                ${stage.error_message ? `• Error: ${stage.error_message}` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div></div>';
+        }
+
+        // Token Usage
+        if (analysisData.token_usage) {
+            const usage = analysisData.token_usage;
+            html += `
+                <div class="analysis-section">
+                    <div class="analysis-header">
+                        <i class="fas fa-memory"></i>
+                        Token Usage
+                    </div>
+                    <div class="token-usage">
+                        <div class="token-stat">
+                            <div class="token-value">${usage.total_tokens ? usage.total_tokens.toLocaleString() : 'N/A'}</div>
+                            <div class="token-label">Total</div>
+                        </div>
+                        <div class="token-stat">
+                            <div class="token-value">${usage.token_limit ? usage.token_limit.toLocaleString() : 'N/A'}</div>
+                            <div class="token-label">Limit</div>
+                        </div>
+                        <div class="token-stat">
+                            <div class="token-value">${usage.utilization ? (usage.utilization * 100).toFixed(1) + '%' : 'N/A'}</div>
+                            <div class="token-label">Used</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Recommendations
+        if (analysisData.legal_analysis && analysisData.legal_analysis.recommendations && analysisData.legal_analysis.recommendations.length > 0) {
+            html += `
+                <div class="analysis-section">
+                    <div class="analysis-header">
+                        <i class="fas fa-lightbulb"></i>
+                        Recommendations
+                    </div>
+                    <div class="recommendations-list">
+            `;
+
+            analysisData.legal_analysis.recommendations.slice(0, 5).forEach(recommendation => {
+                html += `
+                    <div class="recommendation-item">
+                        <i class="fas fa-arrow-right"></i>
+                        <div class="recommendation-text">${this.escapeHtml(recommendation)}</div>
+                    </div>
+                `;
+            });
+
+            html += '</div></div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    formatStageName(stageName) {
+        const stageNames = {
+            'document_processing': 'Document Processing',
+            'intelligent_compression': 'Intelligent Compression',
+            'legal_analysis': 'Legal Analysis',
+            'final_response_generation': 'Response Generation',
+            'pipeline_error': 'Pipeline Error'
+        };
+        return stageNames[stageName] || stageName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     }
 
     showToast(message, type = 'info') {

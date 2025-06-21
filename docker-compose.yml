@@ -75,6 +75,13 @@ services:
       
       # API Keys
       GROQ_API_KEY: ${GROQ_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Vertex AI
+      VERTEX_AI_PROJECT_ID: ${VERTEX_AI_PROJECT_ID}
+      VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-us-central1}
+      VERTEX_AI_MODEL: ${VERTEX_AI_MODEL:-gemini-2.5-pro}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcp-credentials.json
       
       # App Settings
       APP_NAME: Legal RAG Agent
@@ -90,6 +97,7 @@ services:
       - ./app:/app/app
       - upload_data:/app/uploads
       - ./app/static:/app/app/static
+      - ./credentials:/app/credentials
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,7 +134,14 @@ services:
       WEAVIATE_URL: http://weaviate:8080
       
       # API Keys
-      GROQ_API_KEY: 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
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Vertex AI
+      VERTEX_AI_PROJECT_ID: ${VERTEX_AI_PROJECT_ID}
+      VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-us-central1}
+      VERTEX_AI_MODEL: ${VERTEX_AI_MODEL:-gemini-2.5-pro}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcp-credentials.json
       
       # App Settings
       APP_NAME: Legal RAG Agent
@@ -141,6 +156,7 @@ services:
       - ./app:/app/app
       - upload_data:/app/uploads
       - ./app/static:/app/app/static
+      - ./credentials:/app/credentials
     depends_on:
       postgres:
         condition: service_healthy

@@ -161,12 +161,70 @@
                     <i class="fas fa-comments"></i>
                     <h2>Legal Chat</h2>
                     <div class="controls">
+                        <div class="analysis-mode-toggle">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="detailedAnalysisMode" class="analysis-checkbox">
+                                <span class="analysis-toggle-text">Detailed Analysis</span>
+                                <i class="fas fa-info-circle analysis-info" title="Enable comprehensive legal analysis with contradiction detection, temporal tracking, and cross-document reasoning"></i>
+                            </label>
+                        </div>
                         <div class="llm-selector">
                             <select id="llmProvider">
                                 <option value="groq">Groq (Fast)</option>
                                 <option value="openai">OpenAI</option>
+                                <option value="vertexai" selected>Vertex AI (Gemini)</option>
                                 <option value="mock">Test Mode</option>
                             </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analysis Configuration Panel -->
+                <div class="analysis-config" id="analysisConfig" style="display: none;">
+                    <div class="config-header">
+                        <i class="fas fa-cogs"></i>
+                        <h3>Analysis Configuration</h3>
+                    </div>
+                    <div class="config-options">
+                        <div class="config-row">
+                            <label class="config-option">
+                                <input type="checkbox" id="enableContradictionDetection" checked>
+                                <span class="config-label">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                    Contradiction Detection
+                                </span>
+                                <small>Identify conflicts and inconsistencies across documents</small>
+                            </label>
+                        </div>
+                        <div class="config-row">
+                            <label class="config-option">
+                                <input type="checkbox" id="enableTemporalTracking" checked>
+                                <span class="config-label">
+                                    <i class="fas fa-clock"></i>
+                                    Temporal Tracking
+                                </span>
+                                <small>Track how legal positions evolve over time</small>
+                            </label>
+                        </div>
+                        <div class="config-row">
+                            <label class="config-option">
+                                <input type="checkbox" id="enableCrossDocumentReasoning" checked>
+                                <span class="config-label">
+                                    <i class="fas fa-link"></i>
+                                    Cross-Document Reasoning
+                                </span>
+                                <small>Connect related provisions across multiple documents</small>
+                            </label>
+                        </div>
+                        <div class="config-row">
+                            <label class="config-option">
+                                <span class="config-label">
+                                    <i class="fas fa-memory"></i>
+                                    Max Analysis Tokens
+                                </span>
+                                <input type="number" id="maxAnalysisTokens" value="300000" min="50000" max="500000" step="10000" class="token-input">
+                                <small>Maximum tokens for comprehensive analysis (50k-500k)</small>
+                            </label>
                         </div>
                     </div>
                 </div>

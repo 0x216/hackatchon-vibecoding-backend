@@ -10,6 +10,8 @@ services:
       - REDIS_URL=redis://redis:6379
       - WEAVIATE_URL=http://weaviate:8080
       - DEBUG=true
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_PROVIDER=groq
     volumes:
       - ./app:/app
       - ./uploads:/app/uploads
@@ -107,6 +109,7 @@ services:
     networks:
       - legalrag-network
     restart: unless-stopped
+
 
 volumes:
   postgres_data:

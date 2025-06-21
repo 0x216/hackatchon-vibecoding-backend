@@ -59,13 +59,13 @@ services:
   # Legal RAG Agent API + Frontend
   legal-rag-api:
     build:
-      context: ./app
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./app/Dockerfile
     ports:
       - "8000:8000"
     environment:
       # Database
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/legalrag
+      DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/legalrag
       
       # Redis
       REDIS_URL: redis://redis:6379
@@ -74,7 +74,7 @@ services:
       WEAVIATE_URL: http://weaviate:8080
       
       # API Keys
-      GROQ_API_KEY: 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
+      GROQ_API_KEY: ${GROQ_API_KEY}
       
       # App Settings
       APP_NAME: Legal RAG Agent
@@ -85,10 +85,11 @@ services:
       # File Upload
       UPLOAD_PATH: /app/uploads
       MAX_FILE_SIZE: 52428800  # 50MB
-      ALLOWED_EXTENSIONS: ".pdf,.docx,.txt,.rtf"
+      ALLOWED_EXTENSIONS: '[".pdf", ".docx", ".txt", ".rtf"]'
     volumes:
-      - ./app:/app
+      - ./app:/app/app
       - upload_data:/app/uploads
+      - ./app/static:/app/app/static
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,7 +107,50 @@ services:
         echo 'Waiting for services to be ready...' &&
         sleep 10 &&
         echo 'Starting Legal RAG Agent...' &&
-        python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+        python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # Celery Worker for document processing
+  celery-worker:
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/legalrag
+      
+      # Redis
+      REDIS_URL: redis://redis:6379
+      
+      # Weaviate
+      WEAVIATE_URL: http://weaviate:8080
+      
+      # API Keys
+      GROQ_API_KEY: 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
+      
+      # App Settings
+      APP_NAME: Legal RAG Agent
+      APP_VERSION: 1.0.0
+      DEBUG: true
+      
+      # File Upload
+      UPLOAD_PATH: /app/uploads
+      MAX_FILE_SIZE: 52428800  # 50MB
+      ALLOWED_EXTENSIONS: '[".pdf", ".docx", ".txt", ".rtf"]'
+    volumes:
+      - ./app:/app/app
+      - upload_data:/app/uploads
+      - ./app/static:/app/app/static
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Starting Celery Worker...' &&
+        cd /app &&
+        python -m celery -A app.workers.simple_worker worker --loglevel=info --concurrency=2
       "
 
 volumes:

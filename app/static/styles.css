@@ -235,6 +235,9 @@ body {
     margin-bottom: 0.5rem;
     transition: all 0.3s ease;
     cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .document-item:hover {
@@ -266,19 +269,64 @@ body {
     margin-left: 0.5rem;
 }
 
+.status-completed,
 .status-processed {
     background: #c6f6d5;
     color: #2f855a;
 }
 
 .status-processing {
-    background: #fed7d7;
-    color: #c53030;
+    background: #bee3f8;
+    color: #2a69ac;
+    animation: pulse 2s infinite;
 }
 
 .status-pending {
     background: #fef5e7;
     color: #d69e2e;
+}
+
+.status-failed {
+    background: #fed7d7;
+    color: #c53030;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.document-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.document-actions {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.btn-delete {
+    background: none;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    opacity: 0.7;
+}
+
+.btn-delete:hover {
+    background-color: #fef2f2;
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.document-item:not(:hover) .btn-delete {
+    opacity: 0.5;
 }
 
 /* Chat Interface */
@@ -370,10 +418,30 @@ body {
 
 .source-item {
     background: #f7fafc;
-    padding: 0.5rem;
-    border-radius: 4px;
-    margin-bottom: 0.25rem;
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
     font-size: 0.85rem;
+    border-left: 3px solid #4299e1;
+}
+
+.source-doc {
+    font-weight: 600;
+    color: #4299e1;
+    margin-bottom: 0.25rem;
+}
+
+.source-type {
+    font-size: 0.75rem;
+    color: #718096;
+    margin-bottom: 0.25rem;
+}
+
+.source-preview {
+    font-size: 0.8rem;
+    color: #4a5568;
+    line-height: 1.4;
+    font-style: italic;
 }
 
 /* Chat Input Section */

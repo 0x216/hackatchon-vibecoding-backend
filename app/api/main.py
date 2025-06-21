@@ -76,19 +76,59 @@ def create_app() -> FastAPI:
     
     # Serve static files
     static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
-    if os.path.exists(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    static_dir_abs = os.path.abspath(static_dir)
+    
+    print(f"Looking for static files in: {static_dir_abs}")
+    print(f"Static directory exists: {os.path.exists(static_dir_abs)}")
+    
+    if os.path.exists(static_dir_abs):
+        print(f"Mounting static files from: {static_dir_abs}")
+        app.mount("/static", StaticFiles(directory=static_dir_abs), name="static")
+        
+        # List files in static directory for debugging
+        try:
+            files = os.listdir(static_dir_abs)
+            print(f"Static files found: {files}")
+        except Exception as e:
+            print(f"Error listing static files: {e}")
+    else:
+        print("Static directory not found! Files won't be served.")
+        # Try alternative paths
+        alt_paths = [
+            "/app/app/static",
+            "/app/static", 
+            "./static",
+            "../static"
+        ]
+        for alt_path in alt_paths:
+            if os.path.exists(alt_path):
+                print(f"Found alternative static path: {alt_path}")
+                app.mount("/static", StaticFiles(directory=alt_path), name="static")
+                break
 
     @app.get("/")
     async def root():
         """Serve the main frontend page."""
-        static_file = os.path.join(static_dir, "index.html")
-        if os.path.exists(static_file):
-            return FileResponse(static_file)
+        # Try to find index.html in various locations
+        possible_paths = [
+            os.path.join(static_dir_abs, "index.html"),
+            "/app/app/static/index.html",
+            "/app/static/index.html",
+            "./static/index.html",
+            "../static/index.html"
+        ]
+        
+        for static_file in possible_paths:
+            if os.path.exists(static_file):
+                print(f"Serving index.html from: {static_file}")
+                return FileResponse(static_file)
+        
+        print("index.html not found in any expected location")
         return {
-            "message": "Legal RAG Agent API",
+            "message": "Legal RAG Agent API - Frontend files not found",
             "version": settings.app_version,
-            "status": "running"
+            "status": "running",
+            "note": "Static files may not be properly mounted"
         }
     
     @app.get("/health")

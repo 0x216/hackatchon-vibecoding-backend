@@ -40,7 +40,8 @@ Always provide clear, professional responses that help legal professionals under
         query: str, 
         session_id: str = None,
         conversation_history: List[Dict] = None,
-        max_context_chunks: int = 5
+        max_context_chunks: int = 5,
+        document_ids: List[str] = None
     ) -> Dict[str, Any]:
         """Generate RAG response for a legal query."""
         
@@ -49,7 +50,8 @@ Always provide clear, professional responses that help legal professionals under
             logger.info(f"Retrieving relevant documents for query: {query[:100]}...")
             retrieval_results = await self.retriever.retrieve_relevant_chunks(
                 query, 
-                limit=max_context_chunks
+                limit=max_context_chunks,
+                document_ids=document_ids
             )
             
             # Step 2: Build context from retrieved documents

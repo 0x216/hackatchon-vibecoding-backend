@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from typing import List, Optional
 import os
 import hashlib
@@ -12,6 +13,9 @@ from app.db.models import Document, ProcessingTask
 from app.utils.config import settings
 from app.core.ingest.extractors import DocumentExtractor
 from app.core.ingest.processors import DocumentProcessor
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -73,7 +77,7 @@ async def upload_document(
         
         # Check if document already exists
         existing_doc = await db.execute(
-            "SELECT id FROM documents WHERE document_hash = :hash",
+            text("SELECT id FROM documents WHERE document_hash = :hash"),
             {"hash": file_hash}
         )
         if existing_doc.scalar():
@@ -107,7 +111,14 @@ async def upload_document(
         db.add(task)
         await db.commit()
         
-        # TODO: Trigger background processing task
+        # Trigger background processing task
+        try:
+            from app.workers.simple_worker import process_document_task
+            process_document_task.delay(str(document.id), str(file_path))
+            logger.info(f"Started background processing for document {document.id}")
+        except Exception as e:
+            logger.warning(f"Failed to start background processing: {e}")
+            # Don't fail the upload if we can't start processing
         
         return {
             "message": "Document uploaded successfully",
@@ -140,12 +151,12 @@ async def list_documents(
     
     try:
         result = await db.execute(
-            """
+            text("""
             SELECT id, filename, file_type, upload_date, file_size, processing_status
             FROM documents 
             ORDER BY upload_date DESC 
             OFFSET :skip LIMIT :limit
-            """,
+            """),
             {"skip": skip, "limit": limit}
         )
         
@@ -183,7 +194,7 @@ async def get_document(
     
     try:
         result = await db.execute(
-            "SELECT * FROM documents WHERE id = :id",
+            text("SELECT * FROM documents WHERE id = :id"),
             {"id": document_id}
         )
         
@@ -220,12 +231,12 @@ async def delete_document(
     document_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a document."""
+    """Delete a document and all related records."""
     
     try:
-        # Get document details
+        # Check if document exists
         result = await db.execute(
-            "SELECT * FROM documents WHERE id = :id",
+            text("SELECT * FROM documents WHERE id = :id"),
             {"id": document_id}
         )
         
@@ -236,15 +247,40 @@ async def delete_document(
                 detail="Document not found"
             )
         
-        # Delete from database (cascade will handle related records)
+        # Delete in correct order to avoid foreign key violations
+        
+        # 1. Delete processing tasks first
         await db.execute(
-            "DELETE FROM documents WHERE id = :id",
+            text("DELETE FROM processing_tasks WHERE document_id = :id"),
             {"id": document_id}
         )
+        logger.info(f"Deleted processing tasks for document {document_id}")
+        
+        # 2. Delete embeddings
+        await db.execute(
+            text("DELETE FROM embeddings WHERE document_id = :id"),
+            {"id": document_id}
+        )
+        logger.info(f"Deleted embeddings for document {document_id}")
+        
+        # 3. Delete clause versions
+        await db.execute(
+            text("DELETE FROM clause_versions WHERE document_id = :id"),
+            {"id": document_id}
+        )
+        logger.info(f"Deleted clause versions for document {document_id}")
+        
+        # 4. Finally delete the document itself
+        await db.execute(
+            text("DELETE FROM documents WHERE id = :id"),
+            {"id": document_id}
+        )
+        logger.info(f"Deleted document {document_id}")
+        
         await db.commit()
         
         # TODO: Delete file from storage
-        # TODO: Remove embeddings from vector database
+        # TODO: Remove embeddings from vector database (Weaviate)
         
         return {"message": "Document deleted successfully"}
         
@@ -252,6 +288,7 @@ async def delete_document(
         raise
     except Exception as e:
         await db.rollback()
+        logger.error(f"Failed to delete document {document_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete document: {str(e)}"
@@ -267,14 +304,14 @@ async def get_processing_status(
     
     try:
         result = await db.execute(
-            """
+            text("""
             SELECT d.processing_status, t.status as task_status, t.progress, t.error_message
             FROM documents d
             LEFT JOIN processing_tasks t ON d.id = t.document_id
             WHERE d.id = :id
             ORDER BY t.created_at DESC
             LIMIT 1
-            """,
+            """),
             {"id": document_id}
         )
         

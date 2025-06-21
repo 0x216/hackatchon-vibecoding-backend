@@ -1,7 +1,7 @@
 // Legal RAG Agent Frontend
 class LegalRAGApp {
     constructor() {
-        this.apiBase = window.location.origin;
+        this.apiBase = 'http://localhost:8000';
         this.selectedDocument = null;
         this.currentSessionId = null;
         this.llmProvider = 'groq';
@@ -172,6 +172,26 @@ class LegalRAGApp {
 
             if (response.ok) {
                 this.renderDocuments(data.documents);
+                
+                // Check if there are documents still processing
+                const hasProcessingDocs = data.documents.some(doc => 
+                    doc.processing_status === 'processing' || doc.processing_status === 'pending'
+                );
+                
+                if (hasProcessingDocs) {
+                    // Auto-refresh every 3 seconds if documents are still processing
+                    setTimeout(() => this.loadDocuments(), 3000);
+                }
+                
+                // Auto-enable chat if documents are available
+                if (data.documents && data.documents.length > 0) {
+                    setTimeout(() => {
+                        if (!this.selectedDocument) {
+                            this.selectDocument(data.documents[0].id, data.documents[0].filename);
+                        }
+                        this.enableChat();
+                    }, 500);
+                }
             } else {
                 throw new Error('Error loading documents');
             }
@@ -194,16 +214,32 @@ class LegalRAGApp {
         }
 
         container.innerHTML = documents.map(doc => `
-            <div class="document-item" data-id="${doc.id}" onclick="app.selectDocument('${doc.id}', '${doc.filename}')">
-                <div class="document-name">${doc.filename}</div>
-                <div class="document-meta">
-                    ${new Date(doc.upload_date).toLocaleDateString('ru-RU')} • ${this.formatFileSize(doc.file_size)}
-                    <span class="document-status status-${doc.processing_status}">
-                        ${this.getStatusText(doc.processing_status)}
-                    </span>
+            <div class="document-item" data-id="${doc.id}">
+                <div class="document-content">
+                    <div class="document-name">${doc.filename}</div>
+                    <div class="document-meta">
+                        ${new Date(doc.upload_date).toLocaleDateString('ru-RU')} • ${this.formatFileSize(doc.file_size)}
+                        <span class="document-status status-${doc.processing_status}">
+                            ${this.getStatusText(doc.processing_status)}
+                        </span>
+                    </div>
+                </div>
+                <div class="document-actions">
+                    <button class="btn-delete" onclick="app.deleteDocument('${doc.id}', '${doc.filename}')" title="Delete document">
+                        <i class="fas fa-trash"></i>
+                    </button>
                 </div>
             </div>
         `).join('');
+
+        // Add click event listeners to document items
+        document.querySelectorAll('.document-item').forEach(item => {
+            item.addEventListener('click', (event) => {
+                const docId = item.dataset.id;
+                const filename = item.querySelector('.document-name').textContent;
+                this.selectDocument(docId, filename, event);
+            });
+        });
 
         // Enable chat if documents are available
         this.enableChat();
@@ -211,27 +247,105 @@ class LegalRAGApp {
 
     getStatusText(status) {
         const statusMap = {
-            'processed': 'Processed',
-            'processing': 'Processing',
-            'pending': 'Pending'
+            'completed': 'Completed ✅',
+            'processed': 'Processed ✅',
+            'processing': 'Processing ⏳',
+            'pending': 'Pending ⏸️',
+            'failed': 'Failed ❌'
         };
         return statusMap[status] || status;
     }
 
-    selectDocument(documentId, filename) {
-        // Remove previous selection
-        document.querySelectorAll('.document-item').forEach(item => {
-            item.classList.remove('selected');
-        });
-
-        // Add selection to current item
-        document.querySelector(`[data-id="${documentId}"]`).classList.add('selected');
-
-        this.selectedDocument = { id: documentId, filename };
-        this.showToast(`Selected document: ${filename}`, 'info');
+    selectDocument(documentId, filename, event) {
+        const documentItem = document.querySelector(`[data-id="${documentId}"]`);
         
-        // Reset chat session for new document
+        // Initialize selectedDocuments array if not exists
+        if (!this.selectedDocuments) {
+            this.selectedDocuments = [];
+        }
+
+        // Check if Ctrl/Cmd key is pressed for multiple selection
+        if (event && (event.ctrlKey || event.metaKey)) {
+            // Toggle selection
+            if (documentItem.classList.contains('selected')) {
+                documentItem.classList.remove('selected');
+                this.selectedDocuments = this.selectedDocuments.filter(doc => doc.id !== documentId);
+                this.showToast(`Deselected document: ${filename}`, 'info');
+            } else {
+                documentItem.classList.add('selected');
+                this.selectedDocuments.push({ id: documentId, filename });
+                this.showToast(`Added document: ${filename}`, 'info');
+            }
+        } else {
+            // Single selection (clear all others)
+            document.querySelectorAll('.document-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            documentItem.classList.add('selected');
+            this.selectedDocuments = [{ id: documentId, filename }];
+            this.showToast(`Selected document: ${filename}`, 'info');
+        }
+
+        // Update selected document for backward compatibility
+        this.selectedDocument = this.selectedDocuments.length > 0 ? this.selectedDocuments[0] : null;
+        
+        // Reset chat session when selection changes
         this.currentSessionId = null;
+
+        // Update UI to show selection count
+        this.updateSelectionDisplay();
+    }
+
+    updateSelectionDisplay() {
+        const count = this.selectedDocuments ? this.selectedDocuments.length : 0;
+        const selectionInfo = document.querySelector('.selection-info');
+        if (selectionInfo) {
+            if (count > 1) {
+                selectionInfo.textContent = `${count} documents selected`;
+                selectionInfo.style.display = 'block';
+            } else {
+                selectionInfo.style.display = 'none';
+            }
+        }
+    }
+
+    async deleteDocument(documentId, filename) {
+        if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
+            return;
+        }
+
+        this.showLoading('Deleting document...');
+
+        try {
+            const response = await fetch(`${this.apiBase}/api/v1/documents/${documentId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                this.showToast(`Document "${filename}" deleted successfully`, 'success');
+                
+                // Remove from selected documents if it was selected
+                if (this.selectedDocuments) {
+                    this.selectedDocuments = this.selectedDocuments.filter(doc => doc.id !== documentId);
+                }
+                
+                // Update selected document if it was the deleted one
+                if (this.selectedDocument && this.selectedDocument.id === documentId) {
+                    this.selectedDocument = null;
+                }
+                
+                // Reload documents list
+                await this.loadDocuments();
+                
+            } else {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to delete document');
+            }
+        } catch (error) {
+            this.showToast(`Failed to delete document: ${error.message}`, 'error');
+        } finally {
+            this.hideLoading();
+        }
     }
 
     enableChat() {
@@ -250,8 +364,17 @@ class LegalRAGApp {
         if (!message) return;
 
         if (!this.selectedDocument) {
-            this.showToast('Please select a document first', 'error');
-            return;
+            // Auto-select first document if available
+            const firstDoc = document.querySelector('.document-item');
+            if (firstDoc) {
+                const docId = firstDoc.dataset.id;
+                const filename = firstDoc.querySelector('.document-name').textContent;
+                this.selectDocument(docId, filename);
+                this.enableChat();
+            } else {
+                this.showToast('Please select a document first', 'error');
+                return;
+            }
         }
 
         // Add user message to chat
@@ -270,7 +393,8 @@ class LegalRAGApp {
                 body: JSON.stringify({
                     message: message,
                     session_id: this.currentSessionId,
-                    llm_provider: this.llmProvider
+                    llm_provider: this.llmProvider,
+                    document_ids: this.selectedDocuments ? this.selectedDocuments.map(doc => doc.id) : []
                 })
             });
 
@@ -306,7 +430,13 @@ class LegalRAGApp {
             sourcesHtml = `
                 <div class="message-sources">
                     <h4><i class="fas fa-link"></i> Sources:</h4>
-                    ${sources.map(source => `<div class="source-item">${source.title || source.text}</div>`).join('')}
+                    ${sources.map(source => `
+                        <div class="source-item">
+                            <div class="source-doc">${source.document_name || 'Unknown Document'}</div>
+                            <div class="source-type">${source.chunk_type || 'general'} • Relevance: ${(source.similarity_score * 100).toFixed(1)}%</div>
+                            <div class="source-preview">${source.chunk_preview || 'No preview available'}</div>
+                        </div>
+                    `).join('')}
                 </div>
             `;
         }

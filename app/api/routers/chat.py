@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     llm_provider: Optional[str] = "groq"
+    document_ids: Optional[List[str]] = []
 
 
 class ChatResponse(BaseModel):
@@ -82,7 +83,8 @@ async def chat_query(
         rag_response = await rag_generator.generate_response(
             query=request.message,
             session_id=session_id,
-            conversation_history=conversation_history
+            conversation_history=conversation_history,
+            document_ids=request.document_ids
         )
         
         return ChatResponse(

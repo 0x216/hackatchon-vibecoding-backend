@@ -56,13 +56,11 @@ def process_document_task(self, document_id: str, file_path: str):
         self.update_state(state="PROGRESS", meta={"progress": 75, "status": "Saving processed data"})
         
         # Save results to database (run async function in sync context)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         try:
-            loop.run_until_complete(_save_processing_results(document_id, result))
-        finally:
-            loop.close()
+            asyncio.run(_save_processing_results(document_id, result))
+        except Exception as e:
+            logger.error(f"Error saving processing results for document {document_id}: {e}")
+            raise
         
         # Final update
         self.update_state(state="SUCCESS", meta={"progress": 100, "status": "Document processing completed"})
@@ -78,13 +76,10 @@ def process_document_task(self, document_id: str, file_path: str):
         logger.error(f"Error processing document {document_id}: {e}")
         
         # Update task status in database
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         try:
-            loop.run_until_complete(_update_task_status(document_id, "failed", str(e)))
-        finally:
-            loop.close()
+            asyncio.run(_update_task_status(document_id, "failed", str(e)))
+        except Exception as db_error:
+            logger.error(f"Error updating task status for document {document_id}: {db_error}")
         
         self.update_state(
             state="FAILURE",
